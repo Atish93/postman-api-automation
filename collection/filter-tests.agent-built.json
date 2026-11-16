@@ -1,0 +1,387 @@
+{
+  "info": {
+    "name": "Restful-Booker Filter Tests (agent-built)",
+    "description": "Tests firstname/lastname filters on GET /booking. Creates a uniquely named booking, verifies it is found by each filter and by both combined, verifies a non-existent name returns an empty list, then deletes the booking.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://restful-booker.herokuapp.com"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "bookingId",
+      "value": ""
+    },
+    {
+      "key": "firstName",
+      "value": ""
+    },
+    {
+      "key": "lastName",
+      "value": ""
+    },
+    {
+      "key": "missingName",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Auth - get token",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Auth returns 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Token is present', () => pm.expect(body.token).to.be.a('string').and.not.empty);",
+              "pm.collectionVariables.set('token', body.token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"username\":\"admin\",\"password\":\"password123\"}"
+        },
+        "url": "{{baseUrl}}/auth"
+      }
+    },
+    {
+      "name": "2. Create booking with unique name",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const suffix = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);",
+              "pm.collectionVariables.set('firstName', 'QAFirst' + suffix);",
+              "pm.collectionVariables.set('lastName', 'QALast' + suffix);",
+              "pm.collectionVariables.set('missingName', 'NoSuchName' + suffix + 'zz');"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Create returns 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('bookingid is a number', () => pm.expect(body.bookingid).to.be.a('number'));",
+              "pm.test('Booking echoes unique names', () => {",
+              "  pm.expect(body.booking.firstname).to.eql(pm.collectionVariables.get('firstName'));",
+              "  pm.expect(body.booking.lastname).to.eql(pm.collectionVariables.get('lastName'));",
+              "});",
+              "pm.collectionVariables.set('bookingId', body.bookingid);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"firstname\": \"{{firstName}}\",\n  \"lastname\": \"{{lastName}}\",\n  \"totalprice\": 123,\n  \"depositpaid\": true,\n  \"bookingdates\": {\"checkin\": \"2026-12-01\", \"checkout\": \"2026-12-05\"},\n  \"additionalneeds\": \"Breakfast\"\n}"
+        },
+        "url": "{{baseUrl}}/booking"
+      }
+    },
+    {
+      "name": "3. Filter by firstname finds booking",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "const id = Number(pm.collectionVariables.get('bookingId'));",
+              "pm.test('Response is an array', () => pm.expect(body).to.be.an('array'));",
+              "pm.test('Created booking is in results', () => pm.expect(body.map(b => b.bookingid)).to.include(id));",
+              "pm.test('Only the unique booking matches', () => pm.expect(body.length).to.eql(1));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/booking?firstname={{firstName}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "booking"
+          ],
+          "query": [
+            {
+              "key": "firstname",
+              "value": "{{firstName}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "4. Filter by lastname finds booking",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "const id = Number(pm.collectionVariables.get('bookingId'));",
+              "pm.test('Response is an array', () => pm.expect(body).to.be.an('array'));",
+              "pm.test('Created booking is in results', () => pm.expect(body.map(b => b.bookingid)).to.include(id));",
+              "pm.test('Only the unique booking matches', () => pm.expect(body.length).to.eql(1));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/booking?lastname={{lastName}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "booking"
+          ],
+          "query": [
+            {
+              "key": "lastname",
+              "value": "{{lastName}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "5. Filter by firstname + lastname finds booking",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "const id = Number(pm.collectionVariables.get('bookingId'));",
+              "pm.test('Created booking is in results', () => pm.expect(body.map(b => b.bookingid)).to.include(id));",
+              "pm.test('Only the unique booking matches', () => pm.expect(body.length).to.eql(1));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/booking?firstname={{firstName}}&lastname={{lastName}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "booking"
+          ],
+          "query": [
+            {
+              "key": "firstname",
+              "value": "{{firstName}}"
+            },
+            {
+              "key": "lastname",
+              "value": "{{lastName}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "6. Filter by non-existent firstname returns empty list",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Response is an empty array', () => {",
+              "  pm.expect(body).to.be.an('array');",
+              "  pm.expect(body).to.have.lengthOf(0);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/booking?firstname={{missingName}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "booking"
+          ],
+          "query": [
+            {
+              "key": "firstname",
+              "value": "{{missingName}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "7. Filter by non-existent lastname returns empty list",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Response is an empty array', () => {",
+              "  pm.expect(body).to.be.an('array');",
+              "  pm.expect(body).to.have.lengthOf(0);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/booking?lastname={{missingName}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "booking"
+          ],
+          "query": [
+            {
+              "key": "lastname",
+              "value": "{{missingName}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "8. Cleanup - delete booking",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Delete returns 201', () => pm.response.to.have.status(201));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Cookie",
+            "value": "token={{token}}"
+          }
+        ],
+        "url": "{{baseUrl}}/booking/{{bookingId}}"
+      }
+    },
+    {
+      "name": "9. Verify booking is gone",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Deleted booking returns 404', () => pm.response.to.have.status(404));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/booking/{{bookingId}}"
+      }
+    }
+  ]
+}
