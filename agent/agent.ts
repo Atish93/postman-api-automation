@@ -2,7 +2,8 @@
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import newman from "newman";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { search } from "./rag/search.ts";
 
 const WORKSPACE_ID = "a4ac7a19-b10d-4f2d-8621-68f6b79122b5"; // "Practice Collection"
 
@@ -80,7 +81,23 @@ const publishCollection = tool(
   },
 );
 
-const qaServer = createSdkMcpServer({ name: "qa", tools: [runCollection, listCollections, publishCollection] });
+// The "R" in RAG: the agent asks a question and gets back only the most relevant chunks.
+const searchKnowledge = tool(
+  "search_knowledge",
+  "Search the knowledge base (API documentation and the team's test conventions). Returns the most relevant sections.",
+  { query: z.string().describe("What you need to know, in plain words, e.g. 'headers needed to update a booking'") },
+  async ({ query }) => {
+    const hits = search(query);
+    console.log(`[retrieved] "${query}" -> ${hits.map((h) => h.title).join(" | ") || "nothing"}`);
+    const text = hits.map((h) => `### ${h.title} (source: ${h.source})\n${h.text}`).join("\n\n") || "No matching sections.";
+    return { content: [{ type: "text", text }] };
+  },
+);
+
+const qaServer = createSdkMcpServer({
+  name: "qa",
+  tools: [searchKnowledge, runCollection, listCollections, publishCollection],
+});
 
 // ---- 2. The instructions (system prompt) and the task (user prompt) ----
 const systemPrompt = `You are a QA engineer who writes API tests as Postman collections (v2.1 format, JavaScript pm.test scripts).
@@ -88,8 +105,7 @@ Work in this order: design the tests, verify them with run_collection, fix anyth
 If a failure looks like a real bug in the API rather than a mistake in the test, do not weaken the test to hide it; report it instead and leave that request out of the published collection.
 Tests must clean up any data they create. Use collection variables for the base URL and for values passed between requests.
 
-API reference:
-${readFileSync("api-notes.md", "utf8")}`;
+You do not know this API or this team's conventions in advance. Before writing any request, look up the endpoints you will use and the team's test conventions with search_knowledge, and follow what you find. Search again whenever you are unsure rather than guessing.`;
 
 const task =
   process.argv[2] ??
@@ -109,6 +125,7 @@ for await (const msg of query({
     },
     allowedTools: [
       // the only tools the agent may call
+      "mcp__qa__search_knowledge",
       "mcp__qa__run_collection",
       "mcp__qa__postman_list_collections",
       "mcp__qa__postman_publish_collection",

@@ -18,4 +18,10 @@ Run a collection:
     export POSTMAN_API_KEY=...     # your Postman API key
     npx tsx agent.ts "Describe the tests you want and the workspace id to publish to"
 
+### Knowledge base (RAG)
+The agent is not given the API description up front. It looks things up with a `search_knowledge` tool:
+
+- `rag/ingest.ts` builds `rag/index.json` from the API's published docs and the markdown files in `knowledge/`. Re-run it after changing either: `npx tsx rag/ingest.ts`
+- `rag/search.ts` ranks chunks by keyword relevance (BM25). Try a query: `npx tsx rag/search.ts "how do I delete a booking"`
+
 Never commit keys. `.env` is ignored by git.
