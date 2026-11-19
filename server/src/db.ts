@@ -86,6 +86,43 @@ const migrations: string[] = [
   ALTER TABLE runs ADD COLUMN workspace_id TEXT;   -- build: the Postman workspace to publish to
   UPDATE runs SET ai_mode = 'regression' WHERE kind = 'ai';
   `,
+  // 3: phase 4 - email reports and schedules
+  `
+  CREATE TABLE collection_reports (
+    collection_id INTEGER PRIMARY KEY REFERENCES collections(id) ON DELETE CASCADE,
+    recipients    TEXT NOT NULL DEFAULT '[]',   -- JSON array of email addresses
+    send_when     TEXT NOT NULL DEFAULT 'failure' CHECK (send_when IN ('always', 'failure', 'new_failure')),
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    updated_at    TEXT NOT NULL
+  );
+
+  CREATE TABLE schedules (
+    id             INTEGER PRIMARY KEY,
+    collection_id  INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    environment_id INTEGER NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+    kind           TEXT NOT NULL CHECK (kind IN ('plain', 'ai')),
+    cron           TEXT NOT NULL,               -- 5 fields, in the server's local time
+    enabled        INTEGER NOT NULL DEFAULT 1,
+    next_run_at    TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+  );
+
+  CREATE TABLE emails (
+    id         INTEGER PRIMARY KEY,
+    run_id     INTEGER REFERENCES runs(id) ON DELETE CASCADE,
+    recipients TEXT NOT NULL,                  -- JSON array
+    subject    TEXT NOT NULL,
+    status     TEXT NOT NULL CHECK (status IN ('sent', 'failed')),
+    error      TEXT,
+    trigger    TEXT NOT NULL,                  -- 'rule' (sent automatically) or 'manual'
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX emails_by_run ON emails(run_id);
+
+  ALTER TABLE runs ADD COLUMN schedule_id INTEGER REFERENCES schedules(id) ON DELETE SET NULL;
+  ALTER TABLE runs ADD COLUMN unattended INTEGER NOT NULL DEFAULT 0;  -- nobody to answer approvals: they are refused
+  `,
 ];
 
 export function openDb(path = process.env.QA_DB ?? fileURLToPath(new URL("../data/qa.db", import.meta.url))): DB {

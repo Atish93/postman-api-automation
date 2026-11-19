@@ -5,15 +5,16 @@ import { duration, money, relativeTime } from "../format.ts";
 import { Button, Card, EmptyState, ErrorNote, KindBadge, PageHeader, STATUS, Spinner, StatusBadge, inputClass } from "../ui.tsx";
 
 const PAGE = 25;
+const COMPACT = 8; // the short list on a collection's page
 const active = (runs: Run[] | undefined) => runs?.some((r) => r.status === "queued" || r.status === "running");
 
 // The run history, newest first. Refreshes itself while any listed run is still going.
 export function RunsTable({ filters, compact }: { filters: Record<string, string | number | undefined>; compact?: boolean }) {
   const q = useInfiniteQuery({
     queryKey: ["runs", filters],
-    queryFn: ({ pageParam }) => api.runs({ ...filters, limit: PAGE, before_id: pageParam }),
+    queryFn: ({ pageParam }) => api.runs({ ...filters, limit: compact ? COMPACT : PAGE, before_id: pageParam }),
     initialPageParam: undefined as number | undefined,
-    getNextPageParam: (last) => (last.length === PAGE ? last[last.length - 1].id : undefined),
+    getNextPageParam: (last) => (!compact && last.length === PAGE ? last[last.length - 1].id : undefined),
     refetchInterval: (query) => (active(query.state.data?.pages.flat()) ? 3000 : false),
   });
   const runs = q.data?.pages.flat();
@@ -33,7 +34,11 @@ export function RunsTable({ filters, compact }: { filters: Record<string, string
             </Link>
           </li>
         ))}
-        {q.hasNextPage && <li className="p-2 text-center"><Button size="sm" variant="ghost" busy={q.isFetchingNextPage} onClick={() => q.fetchNextPage()}>Show older runs</Button></li>}
+        {runs.length === COMPACT && (
+          <li className="p-2 text-center">
+            <Link to={`/runs?${new URLSearchParams(Object.entries(filters).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]))}`} className="text-xs text-accent hover:underline">All runs</Link>
+          </li>
+        )}
       </ul>
     );
 

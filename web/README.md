@@ -28,7 +28,10 @@ Run the server and Vite's dev server side by side; Vite reloads on every save an
   - AI runs: what the agents are doing, approval cards (Approve / Refuse, with the diff), the agents' report, diagnoses, known bugs and the self-healer's changes, and the full log.
 - **Known bugs**: every known bug across collections and environments, open or possibly fixed, with when it was first and last seen and the evidence.
 - **AI changes**: every change the self-healer made, with its diff and reason, whether you approved it, and whether it was kept or undone.
-- **Settings**: the Postman API key.
+- **Schedules**: every schedule, with its next run and last result; pause, edit, delete. A collection's page has its own schedules too.
+- **Settings**: the Postman API key, and the mail server for reports (with a test email).
+
+A collection's page also sets **who gets its reports by email, and when**: every run, every failure, or only new failures. Each run's page can open or download the full report, email it now, and shows what was sent.
 
 Light, dark, or matching the system: the switch is at the bottom of the navigation. Run statuses always show an icon and a label, never colour alone; every chart has a table view.
 

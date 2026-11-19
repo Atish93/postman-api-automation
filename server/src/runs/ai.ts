@@ -49,6 +49,8 @@ export function runAi(db: DB, run: RunRow, emit: Emit): AiHandle {
       ...process.env,
       ...(postmanKey && { POSTMAN_API_KEY: postmanKey }),
       QA_EVENTS: "1",
+      // Scheduled runs are unattended: approval requests are refused instead of waiting forever.
+      ...(run.unattended ? { QA_NO_PROMPTS: "1" } : {}),
       QA_CONFIG: join(dir, "qa.config.json"),
       QA_RESULT_FILE: resultFile,
     },

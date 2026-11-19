@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.ts";
+import { EmailSettingsCard } from "../EmailSettingsCard.tsx";
 import { Button, Card, ErrorNote, Field, Icon, PageHeader, Spinner, inputClass, useToast } from "../ui.tsx";
 
 export function SettingsPage() {
@@ -43,6 +44,7 @@ export function SettingsPage() {
             {p?.connected && <Button variant="danger" size="sm" busy={save.isPending && save.variables === null} onClick={() => save.mutate(null)}>Remove the key</Button>}
           </div>
         </Card>
+        <EmailSettingsCard />
         <Card title="AI runs">
           <div className="space-y-2 p-4 text-sm text-ink-2">
             <p>AI runs use your Anthropic API key, read from the <code className="font-mono text-ink">ANTHROPIC_API_KEY</code> environment variable when the server starts. It isn't stored or shown here.</p>

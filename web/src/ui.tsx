@@ -1,5 +1,5 @@
 // Shared building blocks: buttons, cards, dialogs, fields, status badges, notifications, icons.
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { cloneElement, createContext, isValidElement, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { RunStatus } from "./api.ts";
 
 // ---------- Icons (stroke icons, 16px by default) ----------
@@ -158,14 +158,20 @@ export function Button({ variant = "secondary", icon, busy, size = "md", childre
   );
 }
 
+// A labelled form field. The label names the control; the hint (or error) describes it
+// (aria-describedby), so screen readers announce "Password" and then the hint, not one long name.
 export function Field({ label, hint, error, children }: { label: string; hint?: ReactNode; error?: string; children: ReactNode }) {
+  const id = useId();
+  const note = error ?? hint;
+  const control = isValidElement(children) && note ? cloneElement(children as React.ReactElement<any>, { "aria-describedby": `${id}-note` }) : children;
   return (
-    <label className="block">
-      <span className="mb-1 block text-sm font-medium">{label}</span>
-      {children}
-      {hint && !error && <span className="mt-1 block text-xs text-muted">{hint}</span>}
-      {error && <span className="mt-1 block text-xs text-bad-ink">{error}</span>}
-    </label>
+    <div>
+      <label className="block">
+        <span className="mb-1 block text-sm font-medium">{label}</span>
+        {control}
+      </label>
+      {note && <span id={`${id}-note`} className={`mt-1 block text-xs ${error ? "text-bad-ink" : "text-muted"}`}>{note}</span>}
+    </div>
   );
 }
 

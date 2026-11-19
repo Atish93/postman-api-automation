@@ -4,7 +4,53 @@ import { Link, useParams } from "react-router";
 import { api, type AiCollectionResult, type Execution, type Run, type RunEvent } from "../api.ts";
 import { Markdown } from "../markdown.tsx";
 import { dateTime, duration, money } from "../format.ts";
-import { Button, Card, ErrorNote, Icon, KindBadge, Spinner, StatusBadge, inputClass, useToast } from "../ui.tsx";
+import { Button, Card, ErrorNote, Icon, KindBadge, Modal, Spinner, StatusBadge, inputClass, useToast } from "../ui.tsx";
+import { relativeTime } from "../format.ts";
+
+// Email this run's report now: to the collection's recipients, or to addresses typed here.
+function EmailReportDialog({ run, open, onClose }: { run: Run; open: boolean; onClose: () => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const rule = useQuery({ queryKey: ["report-rule", run.collection.id], queryFn: () => api.reportRule(run.collection.id!), enabled: open && !!run.collection.id });
+  const [to, setTo] = useState("");
+  useEffect(() => { if (open && rule.data) setTo(rule.data.recipients.join(", ")); }, [open, rule.data]);
+  const send = useMutation({
+    mutationFn: () => api.emailRun(run.id, to.split(/[\s,;]+/).filter(Boolean)),
+    onSuccess: (r) => { toast("ok", `Report sent to ${r.recipients.join(", ")}`); qc.invalidateQueries({ queryKey: ["run-emails", run.id] }); onClose(); },
+  });
+  return (
+    <Modal open={open} onClose={onClose} title="Email this report"
+      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" icon="upload" busy={send.isPending} disabled={!to.trim()} onClick={() => send.mutate()}>Send</Button></>}>
+      <div className="space-y-3">
+        <label className="block"><span className="mb-1 block text-sm font-medium">To</span>
+          <input className={inputClass} value={to} onChange={(e) => setTo(e.target.value)} placeholder="name@example.com, another@example.com" /></label>
+        <p className="text-xs text-ink-2">The email has a summary and a link to this run; the full report is attached.</p>
+        <ErrorNote error={send.error} />
+      </div>
+    </Modal>
+  );
+}
+
+function EmailsSent({ runId, going }: { runId: number; going: boolean }) {
+  const q = useQuery({ queryKey: ["run-emails", runId], queryFn: () => api.runEmails(runId), refetchInterval: going ? 3000 : false });
+  if (!q.data?.length) return null;
+  return (
+    <Card title="Emails">
+      <ul className="divide-y divide-line">
+        {q.data.map((e) => (
+          <li key={e.id} className="flex gap-3 px-4 py-2.5 text-sm">
+            <Icon name={e.status === "sent" ? "check" : "x"} className={`mt-0.5 shrink-0 ${e.status === "sent" ? "text-good" : "text-critical"}`} />
+            <div className="min-w-0 flex-1">
+              <div>{e.status === "sent" ? "Sent" : "Couldn't send"} to {e.recipients.join(", ")} <span className="text-muted">· {e.trigger === "rule" ? "by the collection's report rule" : "by you"}</span></div>
+              {e.error && <div className="text-xs text-bad-ink">{e.error}</div>}
+            </div>
+            <span className="shrink-0 text-xs text-muted">{relativeTime(e.created_at)}</span>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
 
 const FINISHED = ["passed", "passed_with_known_bugs", "failed", "server_issue", "circuit_breaker", "error", "cancelled"];
 
@@ -151,6 +197,8 @@ const EVENT_LOOK: Record<string, { icon: string; color?: string }> = {
   circuit_breaker: { icon: "pause", color: "var(--status-serious)" },
   published: { icon: "upload", color: "var(--status-good)" },
   collection_imported: { icon: "folder", color: "var(--status-good)" },
+  email_sent: { icon: "upload", color: "var(--status-good)" },
+  email_failed: { icon: "alert", color: "var(--status-critical)" },
   updated: { icon: "upload", color: "var(--status-good)" },
 };
 
@@ -178,6 +226,8 @@ function describe(e: RunEvent): React.ReactNode {
     case "circuit_breaker": return <>Circuit breaker tripped: {d.requests_needing_diagnosis} requests failing (trips at {d.trips_at})</>;
     case "published": return <>Published <span className="font-medium">{d.name}</span> to Postman</>;
     case "updated": return <>Saved the collection back to Postman</>;
+    case "email_sent": return <>Emailed the report to {(d.recipients ?? []).join(", ")} <span className="text-ink-2">({d.reason})</span></>;
+    case "email_failed": return <>Couldn't email the report: <span className="text-ink-2">{d.error}</span></>;
     case "collection_imported": return <>Added <Link to={`/collections/${d.collection_id}`} className="font-medium text-accent hover:underline">{d.name}</Link> to your collections</>;
     default: return null;
   }
@@ -219,8 +269,13 @@ export function RunPage() {
   const run = useQuery({ queryKey: ["runs", id], queryFn: () => api.run(id) });
   const events = useRunEvents(id, () => { qc.invalidateQueries({ queryKey: ["runs"] }); qc.invalidateQueries({ queryKey: ["dashboard"] }); });
   const [showLog, setShowLog] = useState(false);
+  const [emailing, setEmailing] = useState(false);
   const cancel = useMutation({ mutationFn: () => api.cancelRun(id), onError: (e) => toast("error", e.message) });
 
+  const emailEvents = events.filter((e) => e.type === "email_sent" || e.type === "email_failed").length;
+  useEffect(() => {
+    if (emailEvents) qc.invalidateQueries({ queryKey: ["run-emails", id] }); // the report was just emailed
+  }, [emailEvents, id, qc]);
   const latestStatus = [...events].reverse().find((e) => e.type === "status" || e.type === "finished")?.data.status;
   const pendingApproval = useMemo(() => {
     const req = [...events].reverse().find((e) => e.type === "approval_request");
@@ -252,8 +307,13 @@ export function RunPage() {
             {" "}on {r.environment.label} · started {dateTime(r.started_at ?? r.created_at)}
             {r.duration_ms != null && ` · took ${duration(r.duration_ms)}`}{r.kind === "ai" && r.cost_usd != null && ` · AI cost ${money(r.cost_usd)}`}
           </p>
+          {r.schedule_id && <p className="mt-1 flex items-center gap-1.5 text-xs text-muted"><Icon name="clock" size={12} />Started by a <Link to="/schedules" className="text-accent hover:underline">schedule</Link>{r.kind === "ai" && ". Unattended: changes needing approval were refused"}</p>}
         </div>
-        {going && (r.kind === "ai" || r.status === "queued") && <Button variant="danger" icon="ban" busy={cancel.isPending} onClick={() => cancel.mutate()}>Cancel run</Button>}
+        <div className="flex flex-wrap gap-2">
+          {going && (r.kind === "ai" || r.status === "queued") && <Button variant="danger" icon="ban" busy={cancel.isPending} onClick={() => cancel.mutate()}>Cancel run</Button>}
+          {!going && <a href={api.reportUrl(r.id)} target="_blank" rel="noreferrer"><Button icon="list">Open report</Button></a>}
+          {!going && <Button icon="upload" onClick={() => setEmailing(true)}>Email report</Button>}
+        </div>
       </div>
 
       <div className="space-y-4">
@@ -279,6 +339,7 @@ export function RunPage() {
           </div>
         )}
 
+        <EmailsSent runId={r.id} going={going} />
         {r.kind === "plain" ? (
           <Card title={going ? <span className="flex items-center gap-2">Requests <Spinner size={12} /></span> : "Requests"}>
             {(executions ?? live).length === 0 ? <p className="px-4 py-6 text-sm text-ink-2">{going ? "Waiting for the first request…" : "No requests ran."}</p> : (
@@ -307,6 +368,7 @@ export function RunPage() {
           </>
         )}
       </div>
+      <EmailReportDialog run={r} open={emailing} onClose={() => setEmailing(false)} />
     </>
   );
 }

@@ -7,6 +7,7 @@ import { FINISHED, type RunManager } from "../runs/manager.ts";
 
 const view = (r: any, withResult = false) => ({
   id: r.id, kind: r.kind, ai_mode: r.ai_mode ?? null, request: r.request ?? null, status: r.status, message: r.message,
+  schedule_id: r.schedule_id ?? null, unattended: !!r.unattended,
   collection: { id: r.collection_id, name: r.collection_name },
   environment: { id: r.environment_id, label: r.environment_label },
   requests: r.requests, assertions: r.assertions, failed_assertions: r.failed_assertions,
@@ -89,38 +90,54 @@ export function runsRoutes(app: FastifyInstance, db: DB, runs: RunManager) {
       .all(Number(req.params.id), Number(req.query.after ?? 0)) as any[]).map((e) => ({ seq: e.seq, type: e.type, data: JSON.parse(e.data_json), created_at: e.created_at }));
   });
 
-  // Live: server-sent events. Sends what happened so far, then each new event, and ends when the run finishes.
+  // Live: server-sent events. Sends what happened so far, then each new event. It ends a few seconds after the
+  // run finishes, so events that follow the finish (e.g. the report being emailed) still arrive.
+  const AFTER_FINISH_MS = 5000;
   app.get<{ Params: { id: string }; Querystring: { after?: string } }>("/api/runs/:id/events", async (req, reply) => {
     const id = Number(req.params.id);
     getRow(id);
     reply.hijack();
     const res = reply.raw;
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-    const send = (e: any) => res.write(`id: ${e.seq}\nevent: ${e.type}\ndata: ${JSON.stringify({ seq: e.seq, type: e.type, data: e.data, created_at: e.created_at })}\n\n`);
 
     let last = Number(req.query.after ?? req.headers["last-event-id"] ?? 0);
+    let closed = false;
+    let closeTimer: NodeJS.Timeout | null = null;
     const buffered: any[] = [];
     let replaying = true;
-    const unsubscribe = runs.subscribe(id, (e) => (replaying ? buffered.push(e) : deliver(e)));
-    const deliver = (e: any) => {
-      if (e.seq <= last) return;
-      last = e.seq;
-      send(e);
-      if (e.type === "finished") close();
+
+    const write = (chunk: string) => {
+      if (!closed && !res.writableEnded) res.write(chunk); // never write after the end: that would throw
     };
     const close = () => {
+      if (closed) return;
+      closed = true;
       unsubscribe();
       clearInterval(keepAlive);
-      res.end();
+      if (closeTimer) clearTimeout(closeTimer);
+      if (!res.writableEnded) res.end();
     };
-    const keepAlive = setInterval(() => res.write(": keep-alive\n\n"), 15_000);
+    const closeIn = (ms: number) => {
+      if (!closeTimer) closeTimer = setTimeout(close, Math.max(0, ms));
+    };
+    const deliver = (e: any) => {
+      if (closed || e.seq <= last) return;
+      last = e.seq;
+      write(`id: ${e.seq}\nevent: ${e.type}\ndata: ${JSON.stringify({ seq: e.seq, type: e.type, data: e.data, created_at: e.created_at })}\n\n`);
+      if (e.type === "finished" && !replaying) closeIn(AFTER_FINISH_MS);
+    };
+    const unsubscribe = runs.subscribe(id, (e) => (replaying ? buffered.push(e) : deliver(e)));
+    const keepAlive = setInterval(() => write(": keep-alive\n\n"), 15_000);
     req.raw.on("close", close);
+    res.on("error", close);
 
+    // Everything stored so far (all of it, even past "finished"), then whatever arrived meanwhile.
     for (const e of db.prepare("SELECT seq, type, data_json, created_at FROM run_events WHERE run_id = ? AND seq > ? ORDER BY seq").all(id, last) as any[])
       deliver({ seq: e.seq, type: e.type, data: JSON.parse(e.data_json), created_at: e.created_at });
     replaying = false;
     for (const e of buffered) deliver(e);
-    if (FINISHED.includes(getRow(id).status) && !res.writableEnded) close();
+    const row = getRow(id);
+    if (FINISHED.includes(row.status)) closeIn(AFTER_FINISH_MS - (Date.now() - Date.parse(row.finished_at ?? 0)));
   });
 
   // Answer the run's pending approval: "y" to approve, anything else to refuse.

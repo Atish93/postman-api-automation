@@ -14,6 +14,8 @@ export type RunRow = {
   ai_mode: "regression" | "build" | null;
   request: string | null;
   workspace_id: string | null;
+  schedule_id: number | null;
+  unattended: number; // 1: nobody can answer approvals (scheduled runs), so they are refused
   status: string;
 };
 
@@ -37,7 +39,8 @@ export class RunManager {
   private working = false;
   private aiRuns = new Map<number, AiHandle>(); // running AI runs, for approvals and cancelling
 
-  constructor(private db: DB) {
+  // onFinished: called after a run is stored as finished (e.g. to email its report). Errors are logged, not thrown.
+  constructor(private db: DB, private onFinished?: (runId: number) => Promise<void>) {
     this.bus.setMaxListeners(0);
     // Runs that were queued or running when the server last stopped can't be resumed.
     db.prepare("UPDATE runs SET status = 'error', message = 'The server stopped before this run finished.', finished_at = ? WHERE status IN ('queued', 'running')").run(now());
@@ -114,6 +117,7 @@ export class RunManager {
       .run(o.status, o.message ?? null, o.requests ?? null, o.assertions ?? null, o.failed_assertions ?? null, o.cost_usd ?? null,
         o.exit_code ?? null, o.result === undefined ? null : JSON.stringify(o.result), now(), runId);
     this.addEvent(runId, "finished", { status: o.status, message: o.message ?? null });
+    if (this.onFinished) this.onFinished(runId).catch((e) => console.error(`After run ${runId}:`, e));
   }
 }
 

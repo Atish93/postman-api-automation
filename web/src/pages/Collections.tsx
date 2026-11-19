@@ -4,6 +4,8 @@ import { Link, useNavigate, useParams } from "react-router";
 import { api, type Collection } from "../api.ts";
 import { RunDialog } from "../RunDialog.tsx";
 import { BuildDialog } from "../BuildDialog.tsx";
+import { ReportsCard } from "../ReportsCard.tsx";
+import { ScheduleForm, ScheduleList } from "./Schedules.tsx";
 import { RunsTable } from "./Runs.tsx";
 import { relativeTime } from "../format.ts";
 import { Button, Card, EmptyState, ErrorNote, Field, Icon, MethodBadge, Modal, PageHeader, Spinner, StatusBadge, inputClass, useToast } from "../ui.tsx";
@@ -169,6 +171,7 @@ export function CollectionPage() {
   const toast = useToast();
   const c = useQuery({ queryKey: ["collections", id], queryFn: () => api.collection(id) });
   const [running, setRunning] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const refresh = useMutation({
     mutationFn: () => api.refreshCollection(id),
@@ -212,10 +215,17 @@ export function CollectionPage() {
             ))}
           </ul>
         </Card>
-        <Card className="lg:col-span-2" title="Runs">
-          <RunsTable filters={{ collection_id: id }} compact />
-        </Card>
+        <div className="space-y-4 lg:col-span-2">
+          <Card title="Runs">
+            <RunsTable filters={{ collection_id: id }} compact />
+          </Card>
+          <Card title="Schedules" actions={<Button size="sm" icon="plus" onClick={() => setScheduling(true)}>Add</Button>}>
+            <ScheduleList collectionId={id} compact />
+          </Card>
+          <ReportsCard collectionId={id} />
+        </div>
       </div>
+      <ScheduleForm open={scheduling} collectionId={id} onClose={() => setScheduling(false)} />
       <RunDialog collection={col} open={running} onClose={() => setRunning(false)} />
       <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title="Delete this collection?"
         footer={<><Button variant="ghost" onClick={() => setConfirmDelete(false)}>Keep it</Button><Button variant="danger" icon="trash" busy={remove.isPending} onClick={() => remove.mutate()}>Delete</Button></>}>

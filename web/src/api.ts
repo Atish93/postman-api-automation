@@ -39,6 +39,7 @@ export type AiCollectionResult = {
 };
 export type Run = {
   id: number; kind: "plain" | "ai"; ai_mode: "regression" | "build" | null; request: string | null; status: RunStatus; message: string | null;
+  schedule_id: number | null; unattended: boolean;
   collection: { id: number | null; name: string }; environment: { id: number | null; label: string };
   requests: number | null; assertions: number | null; failed_assertions: number | null;
   cost_usd: number | null; exit_code: number | null;
@@ -72,6 +73,16 @@ export type StartRun =
   | { kind: "plain"; collection_id: number; environment_id: number }
   | { kind: "ai"; ai_mode: "regression"; collection_id: number; environment_id: number }
   | { kind: "ai"; ai_mode: "build"; request: string; workspace_id: string; environment_id: number };
+
+export type EmailSettings = { configured: boolean; host: string; port: number; secure: boolean; user: string; from: string; dashboard_url: string; has_password: boolean };
+export type ReportRule = { recipients: string[]; send_when: "always" | "failure" | "new_failure"; enabled: boolean };
+export type Schedule = {
+  id: number; kind: "plain" | "ai"; cron: string; enabled: boolean; next_run_at: string | null;
+  collection: { id: number; name: string }; environment: { id: number; label: string };
+  last_run: { id: number; status: RunStatus; created_at: string } | null;
+};
+export type ScheduleInput = { collection_id: number; environment_id: number; kind: "plain" | "ai"; cron: string; enabled: boolean };
+export type SentEmail = { id: number; run_id: number; recipients: string[]; subject: string; status: "sent" | "failed"; error: string | null; trigger: "rule" | "manual"; created_at: string };
 
 export class ApiError extends Error {}
 
@@ -116,6 +127,20 @@ export const api = {
   changes: () => request<HealerChange[]>("GET", "/changes"),
   answerApproval: (id: number, answer: string) => request<{ ok: true }>("POST", `/runs/${id}/approval`, { answer }),
   cancelRun: (id: number) => request<{ ok: true }>("POST", `/runs/${id}/cancel`),
+
+  emailSettings: () => request<EmailSettings>("GET", "/settings/email"),
+  saveEmailSettings: (s: Omit<EmailSettings, "configured" | "has_password"> & { password: string | null }) => request<EmailSettings>("PUT", "/settings/email", s),
+  sendTestEmail: (to: string) => request<{ ok: true }>("POST", "/settings/email/test", { to }),
+  reportRule: (collectionId: number) => request<ReportRule>("GET", `/collections/${collectionId}/reports`),
+  saveReportRule: (collectionId: number, r: ReportRule) => request<ReportRule>("PUT", `/collections/${collectionId}/reports`, r),
+  runEmails: (runId: number) => request<SentEmail[]>("GET", `/runs/${runId}/emails`),
+  emailRun: (runId: number, recipients?: string[]) => request<{ status: string; recipients: string[] }>("POST", `/runs/${runId}/email`, { recipients }),
+  reportUrl: (runId: number, download = false) => `/api/runs/${runId}/report.html${download ? "?download=1" : ""}`,
+  schedules: (collectionId?: number) => request<Schedule[]>("GET", `/schedules${collectionId ? `?collection_id=${collectionId}` : ""}`),
+  schedulePreview: (cron: string) => request<{ next: string[] }>("GET", `/schedules/preview?cron=${encodeURIComponent(cron)}`),
+  createSchedule: (s: ScheduleInput) => request<Schedule>("POST", "/schedules", s),
+  updateSchedule: (id: number, s: ScheduleInput) => request<Schedule>("PUT", `/schedules/${id}`, s),
+  deleteSchedule: (id: number) => request<void>("DELETE", `/schedules/${id}`),
 
   dashboard: (days = 30) => request<Dashboard>("GET", `/dashboard?days=${days}`),
 };

@@ -84,3 +84,25 @@ export async function waitForRun(app: any, id: number, timeoutMs = 120_000) {
   }
   throw new Error(`Run ${id} did not finish in time`);
 }
+
+// A fake mail server that keeps every email it receives. Logins need the given password.
+export async function fakeSmtp(password = "app-pass") {
+  const { SMTPServer } = await import("smtp-server");
+  const mails: { to: string[]; raw: string }[] = [];
+  const server = new SMTPServer({
+    secure: false, disabledCommands: ["STARTTLS"], allowInsecureAuth: true, logger: false,
+    onAuth(auth, _session, cb) {
+      auth.password === password ? cb(null, { user: auth.username }) : cb(Object.assign(new Error("535 Invalid login"), { responseCode: 535 }));
+    },
+    onData(stream, session, cb) {
+      let raw = "";
+      stream.on("data", (c) => (raw += c));
+      stream.on("end", () => {
+        mails.push({ to: (session.envelope.rcptTo as any[]).map((r) => r.address), raw });
+        cb();
+      });
+    },
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  return { port: (server.server.address() as any).port as number, mails, close: () => server.close() };
+}

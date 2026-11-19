@@ -29,8 +29,8 @@ A web dashboard around the agent team in `agent/`: connect Postman collections, 
 | 1 | Server + database: import collections, environments, plain runs, run history | **Done** (`server/`) |
 | 2 | Web UI: Dashboard, Collections, Environments, Runs (live log) | **Done** (`web/`) |
 | 3 | AI runs from the UI: regression/build, live log, approval buttons, cost | **Done** |
-| 4 | Email reports (summary + HTML report + link) and schedules | Next |
-| 5 | Data across environments: encrypted secrets, compare, copy values, test-data files | |
+| 4 | Email reports (summary + HTML report + link) and schedules | **Done** |
+| 5 | Data across environments: encrypted secrets, compare, copy values, test-data files | Next |
 | 6 | Hardening: logins, Postgres, job queue, Docker, deployment, backups, audit log | |
 
 ### 0. Engine (done)
@@ -63,7 +63,9 @@ Build with AI (describe what to test, approve the plan on the run page, the resu
 2. Live log by agent; approval cards with the diff and Approve / Reject.
 3. Known bugs and healer changes as their own views.
 
-### 4. Email and schedules
+### 4. Email and schedules (done)
+SMTP settings with a test email; per-collection recipients and when to send (always, on failure, only new failures); the email with summary, link and the full HTML report attached; reports downloadable from every run; schedules with presets or cron, a preview of the next runs, no pile-ups, unattended AI runs.
+
 1. SMTP settings.
 2. Recipients per collection; send always, on failure, or on new failures only.
 3. Email: summary, link to the run, full HTML report attached.

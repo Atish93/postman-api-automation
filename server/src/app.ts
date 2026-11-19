@@ -13,11 +13,20 @@ import { environmentsRoutes } from "./routes/environments.ts";
 import { runsRoutes } from "./routes/runs.ts";
 import { dashboardRoutes } from "./routes/dashboard.ts";
 import { insightsRoutes } from "./routes/insights.ts";
+import { notificationRoutes } from "./routes/notifications.ts";
+import { scheduleRoutes } from "./routes/schedules.ts";
+import { Scheduler } from "./scheduler.ts";
+import { notifyRunFinished } from "./email.ts";
 import { fileURLToPath } from "node:url";
 
 export function buildApp(db: DB = openDb(), opts: { logger?: boolean } = {}) {
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 20 * 1024 * 1024 });
-  const runs = new RunManager(db);
+  // When a run finishes, email its report if its collection's rule says so, and note that on the run.
+  const runs: RunManager = new RunManager(db, async (runId) => {
+    const sent = await notifyRunFinished(db, runId);
+    if (sent) runs.addEvent(runId, sent.status === "sent" ? "email_sent" : "email_failed", sent);
+  });
+  const scheduler = new Scheduler(db, runs); // started by index.ts
 
   app.setErrorHandler((err: any, _req, reply) => {
     if (err instanceof ZodError)
@@ -36,6 +45,8 @@ export function buildApp(db: DB = openDb(), opts: { logger?: boolean } = {}) {
   runsRoutes(app, db, runs);
   dashboardRoutes(app, db);
   insightsRoutes(app, db);
+  notificationRoutes(app, db);
+  scheduleRoutes(app, db);
 
   // The web app (web/dist, built with `npm run build` in web/), served from the same address.
   // Any non-API path gets index.html, so links into the app work on reload.
@@ -51,7 +62,8 @@ export function buildApp(db: DB = openDb(), opts: { logger?: boolean } = {}) {
         ? reply.code(404).send({ error: "Not found." })
         : reply.type("text/html").sendFile("index.html"));
   }
-  return { app, db, runs };
+  app.addHook("onClose", async () => scheduler.stop());
+  return { app, db, runs, scheduler };
 }
 
 // Shown at / when the web app hasn't been built, instead of a bare 404.

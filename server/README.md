@@ -57,6 +57,19 @@ Every run uses the environment's `base_url` as `{{baseUrl}}`, and its variables 
 - `GET /api/changes`: every change the self-healer made: the request, which part, the reason, the diff, whether you approved it, and whether it was kept, undone, or never proven.
 - `GET /api/dashboard?days=30`: the dashboard's figures.
 
+**Email reports**
+- `GET /api/settings/email`, `PUT /api/settings/email` `{ "host", "port", "secure", "user", "from", "dashboard_url", "password" }`: the mail server. The password is never returned; send `null` to keep it, `""` to clear it. Gmail: `smtp.gmail.com`, port 465, secure, with an [app password](https://myaccount.google.com/apppasswords).
+- `POST /api/settings/email/test` `{ "to" }`: send a test email.
+- `GET` / `PUT /api/collections/:id/reports` `{ "recipients": [...], "send_when": "always" | "failure" | "new_failure", "enabled" }`: who gets a collection's reports, and when. `new_failure` emails only when something fails that didn't last time (known bugs don't count), or a run stops passing.
+- `GET /api/runs/:id/report.html` (`?download=1` to save it): the full report.
+- `POST /api/runs/:id/email` `{ "recipients"?: [...] }`: email a run's report now (to the collection's recipients if none are given).
+- `GET /api/runs/:id/emails`: what was sent for a run, or why it couldn't be.
+
+**Schedules** (5-field cron, in this computer's local time; they run while the server is running, and missed times aren't made up later)
+- `GET /api/schedules?collection_id=`, `POST /api/schedules` `{ "collection_id", "environment_id", "kind": "plain" | "ai", "cron": "0 7 * * 1-5", "enabled" }`, `PUT` / `DELETE /api/schedules/:id`.
+- `GET /api/schedules/preview?cron=…`: the next 3 times, or why the expression is invalid.
+- A schedule doesn't start a new run while its previous one is still going. Scheduled AI runs are unattended: changes that need approval are refused and appear in the report.
+
 **Run statuses:** `queued`, `running`, `passed`, `passed_with_known_bugs` (the only failures are in `KNOWN BUG` requests), `failed`, `server_issue` ("Facing server issues, please check <Env> Env"), `circuit_breaker`, `error`, `cancelled`.
 
 Plain runs use the same server-issue rule as the agents: a failing health check, or at least 80% of requests (and at least 3) getting server errors. A single 5xx is an ordinary failure.
@@ -65,4 +78,4 @@ Plain runs use the same server-issue rule as the agents: a failing health check,
 
     npm test
 
-Runs against a fake API and a fake Postman on your machine: no real services, no model calls, a few seconds.
+Runs against a fake API, a fake Postman and a fake mail server on your machine: no real services, no model calls, nothing sent.

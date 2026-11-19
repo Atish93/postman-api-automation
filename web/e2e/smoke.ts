@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fakeApi, fakePostman, fixtureCollection, POSTMAN_KEY } from "../../server/test/helpers.ts";
+import { fakeApi, fakePostman, fakeSmtp, fixtureCollection, POSTMAN_KEY } from "../../server/test/helpers.ts";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
@@ -20,6 +20,7 @@ try {
 
 const api = await fakeApi();
 const pm = await fakePostman();
+const smtp = await fakeSmtp("app-pass");
 const dir = mkdtempSync(join(tmpdir(), "qa-e2e-"));
 const port = 4300 + Math.floor(Math.random() * 500);
 const server = spawn("npx", ["tsx", "src/index.ts"], {
@@ -40,7 +41,10 @@ async function check(name: string, fn: () => Promise<void>) {
     console.log(`PASS  ${name}`);
   } catch (e: any) {
     failed++;
-    console.log(`FAIL  ${name}\n      ${String(e.message).split("\n")[0]}`);
+    // A screenshot of the page at the moment it failed, to see why.
+    const shot = join(dir, `failed-${failed}.png`);
+    await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
+    console.log(`FAIL  ${name}\n      ${String(e.message).split("\n")[0]}\n      Screenshot: ${shot}`);
   }
 }
 
@@ -177,6 +181,65 @@ await check("Dashboard: shows the runs and the headline figures", async () => {
   await page.getByText("Runs per day").waitFor();
 });
 
+await check("Settings: email is saved and a test email arrives", async () => {
+  await page.goto(`${base}/settings`);
+  await page.getByPlaceholder("smtp.gmail.com", { exact: true }).fill("127.0.0.1");
+  await page.getByLabel("Port", { exact: true }).fill(String(smtp.port));
+  await page.getByLabel(/Use SSL/).uncheck();
+  await page.getByPlaceholder("you@gmail.com", { exact: true }).fill("qa@example.com");
+  await page.getByLabel("Password", { exact: true }).fill("app-pass"); // the hint describes the field, it isn't part of its name
+  await page.getByLabel("Dashboard address").fill(base);
+  await button("Save").first().click();
+  await page.getByText("Email settings saved").waitFor();
+  await page.getByLabel("Send a test email to").fill("me@example.com");
+  await button("Send test").click();
+  await page.getByText("Test email sent to me@example.com").waitFor();
+  if (!smtp.mails.some((m) => m.to.includes("me@example.com"))) throw new Error("no email arrived");
+});
+
+await check("Collection: report recipients and a schedule", async () => {
+  await page.goto(`${base}/collections`);
+  await page.getByRole("link", { name: "Fake API tests", exact: true }).click();
+  await page.getByLabel("Email addresses").fill("dev@example.com, not-an-address");
+  await page.getByRole("button", { name: "Add", exact: true }).last().click();
+  await page.getByText("Not an email address: not-an-address").waitFor();
+  await page.getByLabel("Email addresses").fill("dev@example.com");
+  await page.getByRole("button", { name: "Add", exact: true }).last().click();
+  await page.getByRole("radio", { name: /^Every run/ }).check();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page.getByText("Report settings saved").waitFor();
+  await page.getByRole("button", { name: "Add", exact: true }).first().click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByText("Next runs:").waitFor();
+  await dialog.getByRole("button", { name: "Create schedule" }).click();
+  await page.getByText("Weekdays at 07:00").first().waitFor();
+});
+
+await check("Run: with a report rule, a finished run is emailed and shows it", async () => {
+  const before = smtp.mails.length;
+  await page.getByRole("button", { name: "Run", exact: true }).first().click();
+  await button("Start run").click();
+  await page.waitForURL(/\/runs\/\d+$/);
+  await page.getByText(/Sent to dev@example.com/).waitFor({ timeout: 30_000 });
+  if (smtp.mails.length <= before) throw new Error("no email arrived");
+});
+
+await check("Run: email the report by hand, and open it", async () => {
+  await button("Email report").click();
+  await page.getByRole("dialog").getByRole("textbox").fill("boss@example.com");
+  await page.getByRole("dialog").getByRole("button", { name: "Send" }).click();
+  await page.getByText("Report sent to boss@example.com").waitFor();
+  const [report] = await Promise.all([page.waitForEvent("popup"), page.getByRole("link", { name: "Open report" }).click()]);
+  await report.waitForLoadState();
+  if (!(await report.title()).includes("Fake API tests")) throw new Error(`report title: ${await report.title()}`);
+  await report.close();
+});
+
+await check("Schedules page lists the schedule", async () => {
+  await page.goto(`${base}/schedules`);
+  await page.getByText("Weekdays at 07:00").waitFor();
+});
+
 await check("Theme: switching to dark is applied and remembered", async () => {
   await page.getByRole("radio", { name: "Dark" }).first().click();
   if ((await page.evaluate(() => document.documentElement.dataset.theme)) !== "dark") throw new Error("not dark");
@@ -186,7 +249,7 @@ await check("Theme: switching to dark is applied and remembered", async () => {
 
 await check("Phone width: no page scrolls sideways", async () => {
   await page.setViewportSize({ width: 390, height: 844 });
-  for (const path of ["/", "/collections", "/environments", "/runs", "/runs/1", "/runs/3", "/known-bugs", "/changes", "/settings"]) {
+  for (const path of ["/", "/collections", "/collections/1", "/environments", "/runs", "/runs/1", "/runs/3", "/known-bugs", "/changes", "/schedules", "/settings"]) {
     await page.goto(base + path);
     await page.waitForLoadState("networkidle");
     const width = await page.evaluate(() => document.documentElement.scrollWidth);
@@ -213,5 +276,6 @@ await browser.close();
 server.kill();
 api.close();
 pm.close();
+smtp.close();
 console.log(`\n${failed ? `${failed} check(s) FAILED` : "All checks passed"}`);
 process.exit(failed ? 1 : 0);

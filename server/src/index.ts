@@ -11,6 +11,7 @@ if (major < 22 || (major === 22 && minor < 13)) {
 }
 
 const { buildApp } = await import("./app.ts");
-const { app } = buildApp(undefined, { logger: true });
+const { app, scheduler } = buildApp(undefined, { logger: true });
+scheduler.start();
 const port = Number(process.env.PORT ?? 4000);
 await app.listen({ port, host: process.env.HOST ?? "127.0.0.1" });
