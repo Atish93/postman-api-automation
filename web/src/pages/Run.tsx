@@ -150,6 +150,7 @@ const EVENT_LOOK: Record<string, { icon: string; color?: string }> = {
   server_issue: { icon: "plug", color: "var(--status-serious)" },
   circuit_breaker: { icon: "pause", color: "var(--status-serious)" },
   published: { icon: "upload", color: "var(--status-good)" },
+  collection_imported: { icon: "folder", color: "var(--status-good)" },
   updated: { icon: "upload", color: "var(--status-good)" },
 };
 
@@ -177,6 +178,7 @@ function describe(e: RunEvent): React.ReactNode {
     case "circuit_breaker": return <>Circuit breaker tripped: {d.requests_needing_diagnosis} requests failing (trips at {d.trips_at})</>;
     case "published": return <>Published <span className="font-medium">{d.name}</span> to Postman</>;
     case "updated": return <>Saved the collection back to Postman</>;
+    case "collection_imported": return <>Added <Link to={`/collections/${d.collection_id}`} className="font-medium text-accent hover:underline">{d.name}</Link> to your collections</>;
     default: return null;
   }
 }
@@ -243,7 +245,7 @@ export function RunPage() {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-semibold">Run #{r.id}</h1>
-            <StatusBadge status={r.status} /><KindBadge kind={r.kind} />
+            <StatusBadge status={r.status} /><KindBadge kind={r.kind} mode={r.ai_mode} />
           </div>
           <p className="mt-1 text-sm text-ink-2">
             {r.collection.id ? <Link to={`/collections/${r.collection.id}`} className="hover:text-accent">{r.collection.name}</Link> : r.collection.name}
@@ -255,6 +257,13 @@ export function RunPage() {
       </div>
 
       <div className="space-y-4">
+        {r.ai_mode === "build" && r.request && (
+          <div className="rounded-xl border border-line bg-card px-4 py-3">
+            <div className="text-xs font-medium text-muted">What to test</div>
+            <p className="mt-1 text-sm">{r.request}</p>
+            {!going && !r.collection.id && r.status !== "cancelled" && <p className="mt-2 text-xs text-ink-2">No collection was published from this run.</p>}
+          </div>
+        )}
         {r.message && (
           <div className="flex items-start gap-2 rounded-xl border px-4 py-3 text-sm" style={{ borderColor: "color-mix(in srgb, var(--status-serious) 50%, transparent)", background: "color-mix(in srgb, var(--status-serious) 9%, var(--card))" }}>
             <Icon name={r.status === "circuit_breaker" ? "pause" : "plug"} className="mt-0.5 shrink-0 text-serious" /><span className="font-medium">{r.message}</span>

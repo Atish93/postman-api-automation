@@ -76,9 +76,9 @@ export function StatusBadge({ status }: { status: RunStatus }) {
   );
 }
 
-export function KindBadge({ kind }: { kind: "plain" | "ai" }) {
+export function KindBadge({ kind, mode }: { kind: "plain" | "ai"; mode?: "regression" | "build" | null }) {
   return kind === "ai" ? (
-    <span className="inline-flex items-center gap-1 rounded-md border border-line px-1.5 py-0.5 text-xs text-ink-2"><Icon name="sparkle" size={12} className="text-accent" />AI</span>
+    <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-line px-1.5 py-0.5 text-xs text-ink-2"><Icon name="sparkle" size={12} className="text-accent" />{mode === "build" ? "AI build" : "AI"}</span>
   ) : (
     <span className="inline-flex items-center rounded-md border border-line px-1.5 py-0.5 text-xs text-ink-2">Plain</span>
   );

@@ -79,6 +79,13 @@ const migrations: string[] = [
     UNIQUE (run_id, seq)
   );
   `,
+  // 2: phase 3 - AI build runs (describe what to test; the agents plan, build and publish a new collection)
+  `
+  ALTER TABLE runs ADD COLUMN ai_mode TEXT;        -- AI runs only: 'regression' (re-check a collection) or 'build' (create one)
+  ALTER TABLE runs ADD COLUMN request TEXT;        -- build: what to test, in the user's words
+  ALTER TABLE runs ADD COLUMN workspace_id TEXT;   -- build: the Postman workspace to publish to
+  UPDATE runs SET ai_mode = 'regression' WHERE kind = 'ai';
+  `,
 ];
 
 export function openDb(path = process.env.QA_DB ?? fileURLToPath(new URL("../data/qa.db", import.meta.url))): DB {

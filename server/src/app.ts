@@ -12,6 +12,7 @@ import { collectionsRoutes } from "./routes/collections.ts";
 import { environmentsRoutes } from "./routes/environments.ts";
 import { runsRoutes } from "./routes/runs.ts";
 import { dashboardRoutes } from "./routes/dashboard.ts";
+import { insightsRoutes } from "./routes/insights.ts";
 import { fileURLToPath } from "node:url";
 
 export function buildApp(db: DB = openDb(), opts: { logger?: boolean } = {}) {
@@ -34,6 +35,7 @@ export function buildApp(db: DB = openDb(), opts: { logger?: boolean } = {}) {
   environmentsRoutes(app, db);
   runsRoutes(app, db, runs);
   dashboardRoutes(app, db);
+  insightsRoutes(app, db);
 
   // The web app (web/dist, built with `npm run build` in web/), served from the same address.
   // Any non-API path gets index.html, so links into the app work on reload.

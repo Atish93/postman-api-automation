@@ -38,7 +38,7 @@ export type AiCollectionResult = {
   changes: string[]; published: { uid: string; name: string } | null; updated: string | null;
 };
 export type Run = {
-  id: number; kind: "plain" | "ai"; status: RunStatus; message: string | null;
+  id: number; kind: "plain" | "ai"; ai_mode: "regression" | "build" | null; request: string | null; status: RunStatus; message: string | null;
   collection: { id: number | null; name: string }; environment: { id: number | null; label: string };
   requests: number | null; assertions: number | null; failed_assertions: number | null;
   cost_usd: number | null; exit_code: number | null;
@@ -56,8 +56,22 @@ export type Dashboard = {
   last_week: { runs: number; pass_rate: number | null; ai_cost_usd: number; ai_runs: number };
   daily: { date: string; passed: number; known_bugs: number; failed: number; server_issue: number; other: number; total: number; pass_rate: number | null }[];
   known_bugs: { request: string; collection: string; environment: string; run_id: number; seen_at: string }[];
-  latest_runs: { id: number; kind: "plain" | "ai"; status: RunStatus; collection: string; environment: string; failed_assertions: number | null; cost_usd: number | null; created_at: string; finished_at: string | null }[];
+  latest_runs: { id: number; kind: "plain" | "ai"; ai_mode: "regression" | "build" | null; status: RunStatus; collection: string; environment: string; failed_assertions: number | null; cost_usd: number | null; created_at: string; finished_at: string | null }[];
 };
+
+export type KnownBug = {
+  request: string; collection: { id: number | null; name: string }; environment: string;
+  first_seen: { run_id: number; at: string }; last_failed: { run_id: number; at: string };
+  times_failed: number; evidence: string | null; status: "open" | "may_be_fixed"; latest_run_id: number;
+};
+export type HealerChange = {
+  run_id: number; at: string; collection: { id: number | null; name: string }; environment: string;
+  request: string; part: string; reason: string; diff: string[]; approved_by_human: boolean; outcome: "kept" | "reverted" | "unproven";
+};
+export type StartRun =
+  | { kind: "plain"; collection_id: number; environment_id: number }
+  | { kind: "ai"; ai_mode: "regression"; collection_id: number; environment_id: number }
+  | { kind: "ai"; ai_mode: "build"; request: string; workspace_id: string; environment_id: number };
 
 export class ApiError extends Error {}
 
@@ -97,7 +111,9 @@ export const api = {
     return request<Run[]>("GET", `/runs${q.size ? `?${q}` : ""}`);
   },
   run: (id: number) => request<Run>("GET", `/runs/${id}`),
-  startRun: (collection_id: number, environment_id: number, kind: "plain" | "ai") => request<Run>("POST", "/runs", { collection_id, environment_id, kind }),
+  startRun: (body: StartRun) => request<Run>("POST", "/runs", body),
+  knownBugs: () => request<KnownBug[]>("GET", "/known-bugs"),
+  changes: () => request<HealerChange[]>("GET", "/changes"),
   answerApproval: (id: number, answer: string) => request<{ ok: true }>("POST", `/runs/${id}/approval`, { answer }),
   cancelRun: (id: number) => request<{ ok: true }>("POST", `/runs/${id}/cancel`),
 

@@ -11,6 +11,9 @@ export type RunRow = {
   collection_name: string;
   environment_label: string;
   kind: "plain" | "ai";
+  ai_mode: "regression" | "build" | null;
+  request: string | null;
+  workspace_id: string | null;
   status: string;
 };
 

@@ -6,7 +6,7 @@ import { HttpError } from "../errors.ts";
 import { FINISHED, type RunManager } from "../runs/manager.ts";
 
 const view = (r: any, withResult = false) => ({
-  id: r.id, kind: r.kind, status: r.status, message: r.message,
+  id: r.id, kind: r.kind, ai_mode: r.ai_mode ?? null, request: r.request ?? null, status: r.status, message: r.message,
   collection: { id: r.collection_id, name: r.collection_name },
   environment: { id: r.environment_id, label: r.environment_label },
   requests: r.requests, assertions: r.assertions, failed_assertions: r.failed_assertions,
@@ -24,19 +24,37 @@ export function runsRoutes(app: FastifyInstance, db: DB, runs: RunManager) {
   };
 
   app.post("/api/runs", async (req, reply) => {
+    // Three kinds of run: plain (Newman), AI regression (re-check a collection), AI build (create a collection).
     const body = z.object({
-      collection_id: z.number().int(),
       environment_id: z.number().int(),
       kind: z.enum(["plain", "ai"]).default("plain"),
+      ai_mode: z.enum(["regression", "build"]).default("regression"),
+      collection_id: z.number().int().optional(),
+      request: z.string().trim().max(2000).optional(),
+      workspace_id: z.string().trim().min(1).optional(),
     }).parse(req.body);
-    const c = db.prepare("SELECT id, name, postman_uid FROM collections WHERE id = ?").get(body.collection_id) as any;
-    if (!c) throw new HttpError(404, "Collection not found.");
     const e = db.prepare("SELECT id, label FROM environments WHERE id = ?").get(body.environment_id) as any;
     if (!e) throw new HttpError(404, "Environment not found.");
-    if (body.kind === "ai" && !c.postman_uid)
-      throw new HttpError(400, "AI runs need a collection imported from Postman (the agents read and update it there). Uploaded collections can have plain runs.");
-    const id = Number(db.prepare("INSERT INTO runs (collection_id, environment_id, collection_name, environment_label, kind, status, created_at) VALUES (?, ?, ?, ?, ?, 'queued', ?)")
-      .run(c.id, e.id, c.name, e.label, body.kind, now()).lastInsertRowid);
+    const build = body.kind === "ai" && body.ai_mode === "build";
+
+    let collection: { id: number | null; name: string };
+    if (build) {
+      if (!body.request || body.request.length < 15) throw new HttpError(400, "Describe what to test in a sentence or two (at least 15 characters).");
+      if (!body.workspace_id) throw new HttpError(400, "Choose the Postman workspace to publish the new collection to.");
+      if (body.collection_id) throw new HttpError(400, "A build run creates a new collection; don't pass a collection_id.");
+      // Named after the request until the agents publish the collection; then it's linked to it.
+      collection = { id: null, name: `New: ${body.request.length > 70 ? body.request.slice(0, 70) + "…" : body.request}` };
+    } else {
+      if (!body.collection_id) throw new HttpError(400, "collection_id is required.");
+      const c = db.prepare("SELECT id, name, postman_uid FROM collections WHERE id = ?").get(body.collection_id) as any;
+      if (!c) throw new HttpError(404, "Collection not found.");
+      if (body.kind === "ai" && !c.postman_uid)
+        throw new HttpError(400, "AI runs need a collection imported from Postman (the agents read and update it there). Uploaded collections can have plain runs.");
+      collection = { id: c.id, name: c.name };
+    }
+    const id = Number(db.prepare(`INSERT INTO runs (collection_id, environment_id, collection_name, environment_label, kind, ai_mode, request, workspace_id, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`)
+      .run(collection.id, e.id, collection.name, e.label, body.kind, body.kind === "ai" ? body.ai_mode : null, build ? body.request! : null, build ? body.workspace_id! : null, now()).lastInsertRowid);
     runs.addEvent(id, "status", { status: "queued" });
     runs.enqueue(id);
     reply.code(202);

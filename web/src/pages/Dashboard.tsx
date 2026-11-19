@@ -99,14 +99,14 @@ export function DashboardPage() {
                         <span className="block truncate text-sm">{r.collection}</span>
                         <span className="block text-xs text-muted">{r.environment} · {relativeTime(r.finished_at ?? r.created_at)}</span>
                       </span>
-                      <KindBadge kind={r.kind} />
+                      <KindBadge kind={r.kind} mode={r.ai_mode} />
                       <Icon name="chevron" className="text-muted" />
                     </Link>
                   </li>
                 ))}
               </ul>
             </Card>
-            <Card className="lg:col-span-2" title="Open known bugs">
+            <Card className="lg:col-span-2" title="Open known bugs" actions={<Link to="/known-bugs" className="text-xs text-accent hover:underline">All known bugs</Link>}>
               {d.known_bugs.length === 0 ? (
                 <p className="px-4 py-6 text-sm text-ink-2">No known bugs are failing in the latest runs.</p>
               ) : (

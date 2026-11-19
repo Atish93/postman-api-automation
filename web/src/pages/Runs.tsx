@@ -29,7 +29,7 @@ export function RunsTable({ filters, compact }: { filters: Record<string, string
             <Link to={`/runs/${r.id}`} className="flex items-center gap-2 px-4 py-2.5 hover:bg-raised">
               <StatusBadge status={r.status} />
               <span className="min-w-0 flex-1 truncate text-xs text-ink-2">{r.environment.label} · {relativeTime(r.created_at)}</span>
-              <KindBadge kind={r.kind} />
+              <KindBadge kind={r.kind} mode={r.ai_mode} />
             </Link>
           </li>
         ))}
@@ -55,7 +55,7 @@ export function RunsTable({ filters, compact }: { filters: Record<string, string
                 <td className="px-4 py-2.5"><StatusBadge status={r.status} /></td>
                 <td className="max-w-56 truncate px-4 py-2.5">{r.collection.name}</td>
                 <td className="px-4 py-2.5 text-ink-2">{r.environment.label}</td>
-                <td className="px-4 py-2.5"><KindBadge kind={r.kind} /></td>
+                <td className="px-4 py-2.5"><KindBadge kind={r.kind} mode={r.ai_mode} /></td>
                 <td className="tabular px-4 py-2.5 text-right">{r.assertions == null ? "" : `${r.failed_assertions} of ${r.assertions}`}</td>
                 <td className="tabular whitespace-nowrap px-4 py-2.5 text-right text-ink-2">{duration(r.duration_ms)}</td>
                 <td className="tabular px-4 py-2.5 text-right text-ink-2">{r.kind === "ai" ? money(r.cost_usd) : ""}</td>

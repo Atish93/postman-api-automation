@@ -9,6 +9,7 @@ import { getSetting, type DB } from "../db.ts";
 import type { RunOutcome, RunRow } from "./manager.ts";
 import { statusFromFailures } from "./manager.ts";
 import { loadEnvironment } from "./environment.ts";
+import { importFromPostman } from "../collections.ts";
 import { fileURLToPath } from "node:url";
 
 type Emit = (type: string, data: Record<string, unknown>) => void;
@@ -19,9 +20,17 @@ const runsDir = () => process.env.QA_RUNS_DIR ?? fileURLToPath(new URL("../../da
 
 export function runAi(db: DB, run: RunRow, emit: Emit): AiHandle {
   const env = loadEnvironment(db, run.environment_id!);
-  const collection = db.prepare("SELECT postman_uid FROM collections WHERE id = ?").get(run.collection_id) as any;
-  if (!collection?.postman_uid) {
-    return { done: Promise.resolve({ status: "error", message: "AI runs need a collection imported from Postman." }), answer: () => false, cancel: () => false };
+  const build = run.ai_mode === "build";
+  const failed = (message: string): AiHandle => ({ done: Promise.resolve({ status: "error", message }), answer: () => false, cancel: () => false });
+  // regression: re-check a published collection.  build: plan, build and publish a new one.
+  let args: string[];
+  if (build) {
+    if (!run.request || !run.workspace_id) return failed("A build run needs a request and a workspace.");
+    args = [run.request, run.workspace_id];
+  } else {
+    const collection = db.prepare("SELECT postman_uid FROM collections WHERE id = ?").get(run.collection_id) as any;
+    if (!collection?.postman_uid) return failed("AI runs need a collection imported from Postman.");
+    args = ["--regression", collection.postman_uid];
   }
 
   // This run's settings: the agent's own settings, with only the chosen environment.
@@ -34,7 +43,7 @@ export function runAi(db: DB, run: RunRow, emit: Emit): AiHandle {
   const resultFile = join(dir, "result.json");
 
   const postmanKey = getSetting(db, "postman_api_key");
-  const child = spawn("npx", ["tsx", "orchestrator.ts", "--env", env.name, "--regression", collection.postman_uid], {
+  const child = spawn("npx", ["tsx", "orchestrator.ts", "--env", env.name, ...args], {
     cwd: agentDir(),
     env: {
       ...process.env,
@@ -75,6 +84,7 @@ export function runAi(db: DB, run: RunRow, emit: Emit): AiHandle {
     if (cancelled) return { status: "cancelled", message: "Cancelled while running.", exit_code: code };
 
     const result = existsSync(resultFile) ? JSON.parse(readFileSync(resultFile, "utf8")) : null;
+    if (build) await linkPublishedCollection(db, run.id, result, emit);
     const cols: any[] = result?.collections ?? [];
     const sum = (k: string) => cols.reduce((n, c) => n + (c[k] ?? 0), 0);
     const failing = [...new Set(cols.flatMap((c) => (c.failures ?? []).map((f: any) => f.request)))] as string[];
@@ -109,4 +119,19 @@ export function runAi(db: DB, run: RunRow, emit: Emit): AiHandle {
       return true;
     },
   };
+}
+
+// After a build run: import the collection the agents published, and link the run to it,
+// so it appears on the Collections page with this run in its history.
+export async function linkPublishedCollection(db: DB, runId: number, result: any, emit: Emit) {
+  const published = (result?.collections ?? []).map((c: any) => c.published).find((p: any) => p?.uid);
+  if (!published) return;
+  try {
+    const collectionId = await importFromPostman(db, published.uid);
+    const name = (db.prepare("SELECT name FROM collections WHERE id = ?").get(collectionId) as any).name;
+    db.prepare("UPDATE runs SET collection_id = ?, collection_name = ? WHERE id = ?").run(collectionId, name, runId);
+    emit("collection_imported", { collection_id: collectionId, name, uid: published.uid });
+  } catch (e: any) {
+    emit("log", { stream: "server", line: `The new collection was published to Postman (${published.uid}) but couldn't be imported here: ${e.message}. Import it from the Collections page.` });
+  }
 }

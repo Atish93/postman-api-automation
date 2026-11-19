@@ -4,7 +4,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { fakeApi, fakePostman, fixtureCollection, testApp, waitForRun, POSTMAN_KEY } from "./helpers.ts";
 
-let api: Awaited<ReturnType<typeof fakeApi>>, pm: Awaited<ReturnType<typeof fakePostman>>, app: any;
+let api: Awaited<ReturnType<typeof fakeApi>>, pm: Awaited<ReturnType<typeof fakePostman>>, app: any, db: any;
 const call = async (method: string, url: string, payload?: unknown) => {
   const r = await app.inject({ method, url, payload });
   return { status: r.statusCode, body: r.body ? (() => { try { return r.json(); } catch { return r.body; } })() : null };
@@ -14,7 +14,7 @@ let envId: number, uploadedId: number, importedId: number;
 before(async () => {
   api = await fakeApi();
   pm = await fakePostman();
-  ({ app } = await testApp(pm.url));
+  ({ app, db } = await testApp(pm.url));
 });
 after(async () => { await app.close(); api.close(); pm.close(); });
 
@@ -235,6 +235,92 @@ test("dashboard: headline figures, runs per day and open known bugs", async () =
 test("unknown API paths answer 404 as JSON", async () => {
   const r = await call("GET", "/api/nope");
   assert.equal(r.status, 404);
+});
+
+test("AI build runs: a request and a workspace are required, and no collection", async () => {
+  const base = { environment_id: envId, kind: "ai", ai_mode: "build" };
+  let r = await call("POST", "/api/runs", { ...base, workspace_id: "ws1" });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /Describe what to test/);
+  r = await call("POST", "/api/runs", { ...base, request: "too short", workspace_id: "ws1" });
+  assert.equal(r.status, 400);
+  r = await call("POST", "/api/runs", { ...base, request: "Test creating bookings with missing fields" });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /workspace/);
+  r = await call("POST", "/api/runs", { ...base, request: "Test creating bookings with missing fields", workspace_id: "ws1", collection_id: importedId });
+  assert.equal(r.status, 400);
+});
+
+let buildRunId: number;
+test("AI build runs: start the agents in build mode; a down server stops it before any model call", async () => {
+  api.state.mode = "down";
+  const r = await call("POST", "/api/runs", { environment_id: envId, kind: "ai", ai_mode: "build", request: "Test the item list and the echo endpoint", workspace_id: "ws1" });
+  assert.equal(r.status, 202, JSON.stringify(r.body));
+  assert.equal(r.body.ai_mode, "build");
+  assert.equal(r.body.collection.id, null);
+  assert.equal(r.body.collection.name, "New: Test the item list and the echo endpoint");
+  const run = await waitForRun(app, r.body.id);
+  api.state.mode = "ok";
+  buildRunId = run.id;
+  assert.equal(run.status, "server_issue", run.message);
+  assert.equal(run.request, "Test the item list and the echo endpoint");
+  const started = (await call("GET", `/api/runs/${run.id}/events/history`)).body.find((e: any) => e.type === "run_started");
+  assert.equal(started.data.mode, "build");
+  assert.match(started.data.prompt, /Test the item list and the echo endpoint/);
+  assert.match(started.data.prompt, /ws1/);
+});
+
+test("AI build runs: the published collection is imported and the run linked to it", async () => {
+  const { linkPublishedCollection } = await import("../src/runs/ai.ts");
+  const emitted: any[] = [];
+  await linkPublishedCollection(db, buildRunId, { collections: [{ published: { uid: "1-abc", name: "x" } }] }, (type: string, data: any) => emitted.push({ type, data }));
+  const run = (await call("GET", `/api/runs/${buildRunId}`)).body;
+  assert.equal(run.collection.id, importedId, "the existing import of that Postman collection is reused");
+  assert.equal(run.collection.name, "Fake API tests (from Postman)");
+  assert.deepEqual(emitted.map((e) => e.type), ["collection_imported"]);
+});
+
+test("known bugs: open, possibly fixed, first and last seen, with evidence", async () => {
+  const cid = Number(db.prepare("INSERT INTO collections (name, source, json, request_count, created_at, updated_at) VALUES ('Bugs demo', 'upload', '{}', 2, ?, ?)").run("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").lastInsertRowid);
+  const exec = (name: string, fail: boolean) => ({ request: name, status: 200, error: null, assertions: [{ name: "check", error: fail ? "boom" : null }] });
+  const add = (at: string, result: unknown, kind = "plain") =>
+    db.prepare("INSERT INTO runs (collection_id, environment_id, collection_name, environment_label, kind, status, result_json, created_at, finished_at) VALUES (?, ?, 'Bugs demo', 'Test', ?, 'passed_with_known_bugs', ?, ?, ?)")
+      .run(cid, envId, kind, JSON.stringify(result), at, at);
+  add("2026-01-02T00:00:00Z", { executions: [exec("KNOWN BUG - A", true), exec("KNOWN BUG - B", true)] });
+  add("2026-01-03T00:00:00Z", { collections: [{ known_bugs: ["KNOWN BUG - A", "KNOWN BUG - B"], failures: [{ request: "KNOWN BUG - A" }, { request: "KNOWN BUG - B" }], diagnoses: [{ request: "KNOWN BUG - A", category: "api_bug", evidence: "A returns 200 instead of 404" }] }] }, "ai");
+  add("2026-01-04T00:00:00Z", { executions: [exec("KNOWN BUG - A", true), exec("KNOWN BUG - B", false)] });
+  const bugs = (await call("GET", "/api/known-bugs")).body.filter((b: any) => b.collection.id === cid);
+  const a = bugs.find((b: any) => b.request === "A"), b = bugs.find((b: any) => b.request === "B");
+  assert.equal(a.status, "open");
+  assert.equal(a.times_failed, 3);
+  assert.equal(a.first_seen.at, "2026-01-02T00:00:00Z");
+  assert.equal(a.last_failed.at, "2026-01-04T00:00:00Z");
+  assert.equal(a.evidence, "A returns 200 instead of 404");
+  assert.equal(b.status, "may_be_fixed");
+  assert.equal(b.last_failed.at, "2026-01-03T00:00:00Z");
+  assert.equal(bugs[0].request, "A", "open bugs first");
+});
+
+test("known bugs: evidence falls back to what the agents wrote on the marked request", async () => {
+  const json = { info: { name: "Marked" }, item: [{ name: "KNOWN BUG - C", request: { method: "GET", url: "x", description: "This request currently fails because of an API bug:\n- Check C: C answers 500 for valid input" } }] };
+  const cid = Number(db.prepare("INSERT INTO collections (name, source, json, request_count, created_at, updated_at) VALUES ('Marked', 'postman', ?, 1, ?, ?)").run(JSON.stringify(json), "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").lastInsertRowid);
+  db.prepare("INSERT INTO runs (collection_id, environment_id, collection_name, environment_label, kind, status, result_json, created_at, finished_at) VALUES (?, ?, 'Marked', 'Test', 'plain', 'passed_with_known_bugs', ?, ?, ?)")
+    .run(cid, envId, JSON.stringify({ executions: [{ request: "KNOWN BUG - C", status: 500, error: null, assertions: [{ name: "Check C", error: "boom" }] }] }), "2026-01-06T00:00:00Z", "2026-01-06T00:00:00Z");
+  const c = (await call("GET", "/api/known-bugs")).body.find((b: any) => b.collection.id === cid);
+  assert.equal(c.evidence, "C answers 500 for valid input");
+});
+
+test("AI changes: each change with its outcome", async () => {
+  const rid = Number(db.prepare("INSERT INTO runs (collection_name, environment_label, kind, ai_mode, status, created_at) VALUES ('Changes demo', 'Test', 'ai', 'regression', 'passed', ?)").run("2026-01-05T00:00:00Z").lastInsertRowid);
+  const ev = (seq: number, type: string, data: unknown) => db.prepare("INSERT INTO run_events (run_id, seq, type, data_json, created_at) VALUES (?, ?, ?, ?, ?)").run(rid, seq, type, JSON.stringify(data), "2026-01-05T00:00:00Z");
+  ev(1, "change_pending", { request: "07 Update", part: "headers", reason: "missing token", diff: ["+ Cookie"], approved_by_human: false });
+  ev(2, "change_pending", { request: "09 Delete", part: "test_script", reason: "201 not 200", diff: ["- 200", "+ 201"], approved_by_human: true });
+  ev(3, "change_kept", { request: "07 Update" });
+  ev(4, "change_reverted", { request: "09 Delete" });
+  ev(5, "change_pending", { request: "10 Get", part: "url", reason: "x", diff: [], approved_by_human: true });
+  const changes = (await call("GET", "/api/changes")).body.filter((c: any) => c.run_id === rid);
+  assert.deepEqual(changes.map((c: any) => [c.request, c.outcome, c.approved_by_human]), [["07 Update", "kept", false], ["09 Delete", "reverted", true], ["10 Get", "unproven", true]]);
+  assert.deepEqual(changes[1].diff, ["- 200", "+ 201"]);
 });
 
 test("deleting a collection keeps its run history", async () => {

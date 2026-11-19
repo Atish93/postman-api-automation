@@ -15,7 +15,7 @@ export function RunDialog({ collection, open, onClose }: { collection: Pick<Coll
   const aiAllowed = collection.source === "postman";
 
   const start = useMutation({
-    mutationFn: () => api.startRun(collection.id, chosenEnv!, kind),
+    mutationFn: () => api.startRun(kind === "ai" ? { kind, ai_mode: "regression", collection_id: collection.id, environment_id: chosenEnv! } : { kind, collection_id: collection.id, environment_id: chosenEnv! }),
     onSuccess: (run) => {
       qc.invalidateQueries({ queryKey: ["runs"] });
       onClose();

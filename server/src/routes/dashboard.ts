@@ -76,7 +76,7 @@ export function dashboardRoutes(app: FastifyInstance, db: DB) {
     );
 
     const latestRuns = (db.prepare("SELECT * FROM runs ORDER BY id DESC LIMIT 8").all() as any[]).map((r) => ({
-      id: r.id, kind: r.kind, status: r.status, collection: r.collection_name, environment: r.environment_label,
+      id: r.id, kind: r.kind, ai_mode: r.ai_mode ?? null, status: r.status, collection: r.collection_name, environment: r.environment_label,
       failed_assertions: r.failed_assertions, cost_usd: r.cost_usd, created_at: r.created_at, finished_at: r.finished_at,
     }));
 

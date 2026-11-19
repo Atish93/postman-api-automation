@@ -7,6 +7,8 @@ const NAV = [
   { to: "/collections", label: "Collections", icon: "folder" },
   { to: "/environments", label: "Environments", icon: "globe" },
   { to: "/runs", label: "Runs", icon: "list" },
+  { to: "/known-bugs", label: "Known bugs", icon: "bug" },
+  { to: "/changes", label: "AI changes", icon: "sparkle" },
   { to: "/settings", label: "Settings", icon: "gear" },
 ];
 

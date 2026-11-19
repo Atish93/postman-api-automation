@@ -138,6 +138,29 @@ await check("Run: an AI run on a down server stops with the server-issue message
   api.state.mode = "ok";
 });
 
+await check("Build with AI: needs a description, then starts a build run (a down server stops it before any AI cost)", async () => {
+  api.state.mode = "down";
+  await page.goto(`${base}/collections`);
+  await button("Build with AI").click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("What should be tested?").fill("too short");
+  if (!(await dialog.getByRole("button", { name: "Start building" }).isDisabled())) throw new Error("starts with a too-short description");
+  await dialog.getByRole("button", { name: /firstname and lastname filters/ }).click();
+  await dialog.getByRole("button", { name: "Start building" }).click();
+  await page.waitForURL(/\/runs\/\d+$/);
+  await page.getByText("What to test").waitFor();
+  await page.getByText("AI build").first().waitFor();
+  await page.getByText("Facing server issues, please check Test Env").first().waitFor({ timeout: 60_000 });
+  api.state.mode = "ok";
+});
+
+await check("Known bugs and AI changes pages explain themselves when empty", async () => {
+  await page.goto(`${base}/known-bugs`);
+  await page.getByText("No known bugs").waitFor();
+  await page.goto(`${base}/changes`);
+  await page.getByText("No changes yet").waitFor();
+});
+
 await check("Runs: the history lists both runs and filters by status", async () => {
   await page.goto(`${base}/runs`);
   await page.getByRole("link", { name: "#2" }).waitFor();
@@ -163,7 +186,7 @@ await check("Theme: switching to dark is applied and remembered", async () => {
 
 await check("Phone width: no page scrolls sideways", async () => {
   await page.setViewportSize({ width: 390, height: 844 });
-  for (const path of ["/", "/collections", "/environments", "/runs", "/runs/1", "/settings"]) {
+  for (const path of ["/", "/collections", "/environments", "/runs", "/runs/1", "/runs/3", "/known-bugs", "/changes", "/settings"]) {
     await page.goto(base + path);
     await page.waitForLoadState("networkidle");
     const width = await page.evaluate(() => document.documentElement.scrollWidth);

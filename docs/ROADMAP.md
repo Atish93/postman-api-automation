@@ -28,8 +28,8 @@ A web dashboard around the agent team in `agent/`: connect Postman collections, 
 | 0 | Engine ready for a UI: events, approvals by another program, result file | **Done** |
 | 1 | Server + database: import collections, environments, plain runs, run history | **Done** (`server/`) |
 | 2 | Web UI: Dashboard, Collections, Environments, Runs (live log) | **Done** (`web/`) |
-| 3 | AI runs from the UI: regression/build, live log, approval buttons, cost | Next (mostly done in phase 2) |
-| 4 | Email reports (summary + HTML report + link) and schedules | |
+| 3 | AI runs from the UI: regression/build, live log, approval buttons, cost | **Done** |
+| 4 | Email reports (summary + HTML report + link) and schedules | Next |
 | 5 | Data across environments: encrypted secrets, compare, copy values, test-data files | |
 | 6 | Hardening: logins, Postgres, job queue, Docker, deployment, backups, audit log | |
 
@@ -56,7 +56,9 @@ See `web/README.md`. It already starts AI runs (regression), follows them live a
 2. Collections, Environments and Runs pages; a run's page shows the live log and results.
 3. Dashboard: pass rate over time, latest runs, open known bugs, healer changes, AI cost per week.
 
-### 3. AI runs in the UI
+### 3. AI runs in the UI (done)
+Build with AI (describe what to test, approve the plan on the run page, the result is published and imported), Known bugs and AI changes pages, evidence from the debugger or the marked request.
+
 1. Run dialog: collection, environment, plain or AI, regression or build.
 2. Live log by agent; approval cards with the diff and Approve / Reject.
 3. Known bugs and healer changes as their own views.

@@ -1,20 +1,10 @@
 // Collections: import from Postman, upload a file, list, view, refresh, delete.
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { now, type DB } from "../db.ts";
+import type { DB } from "../db.ts";
 import { HttpError } from "../errors.ts";
 import { postman } from "../postman.ts";
-
-function requestsOf(items: any[] = [], folder: string | null = null): any[] {
-  return items.flatMap((it) =>
-    it.item
-      ? requestsOf(it.item, folder ? `${folder} / ${it.name}` : it.name)
-      : [{ name: it.name, folder, method: it.request?.method ?? "GET", url: typeof it.request?.url === "string" ? it.request.url : it.request?.url?.raw ?? "" }],
-  );
-}
-
-// A Postman v2.1 collection: info.name and an item list.
-const CollectionJson = z.object({ info: z.object({ name: z.string().min(1) }).passthrough(), item: z.array(z.any()) }).passthrough();
+import { requestsOf, saveCollection } from "../collections.ts";
 
 const summary = (r: any) => ({
   id: r.id, name: r.name, source: r.source, postman_uid: r.postman_uid, request_count: r.request_count,
@@ -28,18 +18,7 @@ export function collectionsRoutes(app: FastifyInstance, db: DB) {
     return row as any;
   };
 
-  const save = (json: any, source: "postman" | "upload", uid: string | null) => {
-    const parsed = CollectionJson.parse(json);
-    const count = requestsOf(parsed.item).length;
-    const existing = uid ? (db.prepare("SELECT id FROM collections WHERE postman_uid = ?").get(uid) as any) : null;
-    if (existing) {
-      db.prepare("UPDATE collections SET name = ?, json = ?, request_count = ?, updated_at = ? WHERE id = ?").run(parsed.info.name, JSON.stringify(parsed), count, now(), existing.id);
-      return existing.id as number;
-    }
-    const t = now();
-    return Number(db.prepare("INSERT INTO collections (name, source, postman_uid, json, request_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(parsed.info.name, source, uid, JSON.stringify(parsed), count, t, t).lastInsertRowid);
-  };
+  const save = (json: unknown, source: "postman" | "upload", uid: string | null) => saveCollection(db, json, source, uid);
 
   app.get("/api/collections", async () => {
     const rows = db.prepare(`

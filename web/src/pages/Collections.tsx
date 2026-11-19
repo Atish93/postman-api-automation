@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router";
 import { api, type Collection } from "../api.ts";
 import { RunDialog } from "../RunDialog.tsx";
+import { BuildDialog } from "../BuildDialog.tsx";
 import { RunsTable } from "./Runs.tsx";
 import { relativeTime } from "../format.ts";
 import { Button, Card, EmptyState, ErrorNote, Field, Icon, MethodBadge, Modal, PageHeader, Spinner, StatusBadge, inputClass, useToast } from "../ui.tsx";
@@ -102,6 +103,7 @@ export function CollectionsPage() {
   const toast = useToast();
   const list = useQuery({ queryKey: ["collections"], queryFn: api.collections });
   const [importing, setImporting] = useState(false);
+  const [building, setBuilding] = useState(false);
   const [running, setRunning] = useState<Collection | null>(null);
   const upload = useUpload();
   const refresh = useMutation({
@@ -113,7 +115,8 @@ export function CollectionsPage() {
   const actions = (
     <>
       <Button icon="upload" busy={upload.busy} onClick={upload.open}>Upload file</Button>
-      <Button variant="primary" icon="download" onClick={() => setImporting(true)}>Import from Postman</Button>
+      <Button icon="download" onClick={() => setImporting(true)}>Import from Postman</Button>
+      <Button variant="primary" icon="sparkle" onClick={() => setBuilding(true)}>Build with AI</Button>
     </>
   );
 
@@ -123,7 +126,7 @@ export function CollectionsPage() {
       {upload.element}
       <ErrorNote error={list.error} />
       {list.isPending ? <div className="flex justify-center py-20 text-muted"><Spinner size={24} /></div> : list.data?.length === 0 ? (
-        <Card><EmptyState icon="folder" title="No collections yet" action={<div className="flex gap-2">{actions}</div>}>Import a collection from your Postman workspace, or upload a collection file exported from Postman.</EmptyState></Card>
+        <Card><EmptyState icon="folder" title="No collections yet" action={<div className="flex gap-2">{actions}</div>}>Import a collection from your Postman workspace, upload a collection file, or describe what to test and let the AI agents build one.</EmptyState></Card>
       ) : (
         <Card>
           <div className="relative overflow-x-auto">
@@ -152,6 +155,7 @@ export function CollectionsPage() {
         </Card>
       )}
       <ImportDialog open={importing} onClose={() => setImporting(false)} />
+      <BuildDialog open={building} onClose={() => setBuilding(false)} />
       {running && <RunDialog collection={running} open onClose={() => setRunning(null)} />}
     </>
   );

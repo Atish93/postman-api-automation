@@ -21,11 +21,13 @@ Run the server and Vite's dev server side by side; Vite reloads on every save an
 ## Pages
 
 - **Dashboard**: runs and pass rate over the last 7 days compared with the 7 before, open known bugs, AI cost; runs per day by outcome and pass rate per day (each with a table view); latest runs. With no runs yet, it shows the four steps to a first run.
-- **Collections**: import from Postman (connects through Settings first), upload a collection file, update from Postman, run. A collection's page lists its requests and runs, and can download or delete it.
+- **Collections**: import from Postman (connects through Settings first), upload a collection file, update from Postman, run. **Build with AI**: describe what to test; the agents write a plan for you to approve or send back, build the collection, debug and fix it, publish it to Postman, and it's added here. A collection's page lists its requests and runs, and can download or delete it.
 - **Environments**: base URL, health check path and variables. Secret values are sent once and never shown again; leave one empty to keep it.
 - **Runs**: the history, filterable by collection, environment, status and kind. A run's page follows it live:
   - plain runs: each request as it finishes, expandable to its checks, URL and response;
   - AI runs: what the agents are doing, approval cards (Approve / Refuse, with the diff), the agents' report, diagnoses, known bugs and the self-healer's changes, and the full log.
+- **Known bugs**: every known bug across collections and environments, open or possibly fixed, with when it was first and last seen and the evidence.
+- **AI changes**: every change the self-healer made, with its diff and reason, whether you approved it, and whether it was kept or undone.
 - **Settings**: the Postman API key.
 
 Light, dark, or matching the system: the switch is at the bottom of the navigation. Run statuses always show an icon and a label, never colour alone; every chart has a table view.
