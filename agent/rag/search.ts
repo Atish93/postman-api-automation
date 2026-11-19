@@ -2,17 +2,27 @@
 // This uses keyword ranking (BM25, via MiniSearch): chunks score higher when they contain the
 // query's words, especially rare ones. Try it: npx tsx rag/search.ts "how do I delete a booking"
 import MiniSearch from "minisearch";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { Chunk } from "./ingest.ts";
 
-const chunks: Chunk[] = JSON.parse(readFileSync(new URL("./index.json", import.meta.url), "utf8"));
+const indexFile = new URL("./index.json", import.meta.url);
+const chunks: Chunk[] = JSON.parse(readFileSync(indexFile, "utf8"));
 
 const index = new MiniSearch<Chunk>({
   fields: ["title", "text"], // what is searched
   storeFields: ["source", "title", "text"], // what comes back
 });
 index.addAll(chunks);
+
+// Adds a new chunk while the program runs (used when the debugger learns something),
+// and saves it so the next run finds it too.
+export function addChunk(chunk: Chunk) {
+  if (index.has(chunk.id)) return;
+  index.add(chunk);
+  chunks.push(chunk);
+  writeFileSync(indexFile, JSON.stringify(chunks, null, 2));
+}
 
 export function search(query: string, limit = 3) {
   return index

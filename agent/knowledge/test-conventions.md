@@ -26,3 +26,7 @@ A successful DELETE answers 201, not 200 or 204.
 Login with wrong credentials answers 200 with {"reason":"Bad credentials"} instead of 401.
 Update and delete without credentials answer 403.
 These are the API's real behaviour, so tests assert them as they are.
+
+## Known API bugs
+When the knowledge base lists a known API bug, still assert the behaviour the API documentation describes.
+The test is meant to fail until the API is fixed; never write a test that expects the buggy behaviour.

@@ -24,12 +24,25 @@ Run a collection:
 | Agent | Job | Tools |
 |---|---|---|
 | Planner | Turns a request into test cases (JSON) | `search_knowledge` |
-| Builder | Turns the approved cases into a passing collection | `search_knowledge`, `run_collection` |
-| Orchestrator | Runs plan -> human approval -> build -> publish | `Agent` (starts the others), `request_approval`, `postman_list_collections`, `postman_publish_collection` |
+| Builder | Turns the approved cases into a collection and runs it once | `search_knowledge`, `run_collection` |
+| Debugger | Diagnoses each failure as test defect, flaky, or API bug, by probing the API directly. Changes nothing | `search_knowledge`, `get_request`, `send_request`, `rerun_collection`, `record_diagnosis` |
+| Self-healer | Fixes diagnosed test defects with the smallest change | `search_knowledge`, `get_request`, `patch_request`, `rerun_collection` |
+| Orchestrator | Runs the process and decides what gets published | `Agent` (starts the others), `run_status`, `mark_known_bugs`, approval and Postman tools |
 
-The run pauses at the plan and waits for you to type `y`, or what to change. Publishing is refused in code unless a human approved the plan and the last run had zero failures.
+Two modes:
 
-    npx tsx orchestrator.ts "what to test" [workspace id]
+    npx tsx orchestrator.ts "what to test" [workspace id]        # build a new collection
+    npx tsx orchestrator.ts --regression [collection uid ...]    # re-check published collections
+
+With no uids, regression re-checks every "(agent-built)" collection in the workspace.
+
+Rules enforced in code (`tools.ts`), not just in the agents' instructions:
+- The healer may only change requests the debugger diagnosed as a test defect, and never one diagnosed as an API bug.
+- A healer change that touches an assertion line pauses and waits for you to type `y`. With nobody to answer (for example in CI), it is refused.
+- API bugs keep their failing checks; the request is renamed `KNOWN BUG - ...`.
+- Nothing is published or updated unless every remaining failure is a marked known bug, and in build mode only after you approved the plan.
+- The debugger may only send probe requests to the API under test.
+- High-confidence findings are appended to `knowledge/known-issues.md` and added to the search index, so later runs recognise them.
 
 `agent.ts` is the earlier single-agent version of the same job, kept for comparison. Shared tools live in `tools.ts`.
 

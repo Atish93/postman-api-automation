@@ -82,5 +82,29 @@
     "source": "test-conventions.md",
     "title": "Known quirks of Restful-Booker",
     "text": "A successful DELETE answers 201, not 200 or 204.\nLogin with wrong credentials answers 200 with {\"reason\":\"Bad credentials\"} instead of 401.\nUpdate and delete without credentials answer 403.\nThese are the API's real behaviour, so tests assert them as they are."
+  },
+  {
+    "id": "test-conventions.md:Known API bugs",
+    "source": "test-conventions.md",
+    "title": "Known API bugs",
+    "text": "When the knowledge base lists a known API bug, still assert the behaviour the API documentation describes.\nThe test is meant to fail until the API is fixed; never write a test that expects the buggy behaviour."
+  },
+  {
+    "id": "known-issues.md:Known API bug: GET /booking?checkin=YYYY-MM-DD leaves out bookings whose checkin equals the given date (it acts as strictly after), although the docs say on or after.",
+    "source": "known-issues.md",
+    "title": "Known API bug: GET /booking?checkin=YYYY-MM-DD leaves out bookings whose checkin equals the given date (it acts as strictly after), although the docs say on or after.",
+    "text": "Docs: checkin filter returns bookings with checkin \"greater than or equal to\" the date. Created booking 2081 with checkin 2027-01-01. GET /booking?checkin=2027-01-01 returned [{\"bookingid\":1599}] (2081 missing). GET /booking?checkin=2026-12-31 returned [1599, 2081]. So the filter is strictly greater-than and leaves out same-day check-ins, which contradicts the docs.\nFound 2026-11-19 in \"05b Filter by checkin date (same day)\"."
+  },
+  {
+    "id": "known-issues.md:Test pitfall: PUT /booking/:id returns 403 Forbidden unless a Cookie token=... or Basic Authorization header is sent, so every update request needs the auth header.",
+    "source": "known-issues.md",
+    "title": "Test pitfall: PUT /booking/:id returns 403 Forbidden unless a Cookie token=... or Basic Authorization header is sent, so every update request needs the auth header.",
+    "text": "The request 07 definition sends only the Content-Type and Accept headers, with no Cookie and no Authorization. Requests 08 and 09 send \"Cookie: token={{token}}\". Probe: PUT /booking/2081 without a Cookie returned 403 \"Forbidden\". The same PUT with \"Cookie: token=bd3b3839fb149c5\" returned 200 with totalprice 200. Docs: PUT needs either a Cookie token or Basic Authorization.\nFix: Add the header \"Cookie: token={{token}}\" to 07, as 08 and 09 already do.\nFound 2026-11-19 in \"07 Update booking (full)\"."
+  },
+  {
+    "id": "known-issues.md:Test pitfall: DELETE /booking/:id returns 201 Created on success, as documented, not 200.",
+    "source": "known-issues.md",
+    "title": "Test pitfall: DELETE /booking/:id returns 201 Created on success, as documented, not 200.",
+    "text": "The docs for DELETE /booking/:id show the response \"HTTP/1.1 201 Created\". Probe: DELETE /booking/2081 with the Cookie token returned 201 \"Created\". In the run, the follow-up GET (request 10) returned 404, so the delete works. The test expects 200, which the docs do not support.\nFix: Expect status 201 (Created) for a successful DELETE.\nFound 2026-11-19 in \"09 Delete booking\"."
   }
 ]
