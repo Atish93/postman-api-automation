@@ -18,6 +18,21 @@ Run a collection:
     export POSTMAN_API_KEY=...     # your Postman API key
     npx tsx agent.ts "Describe the tests you want and the workspace id to publish to"
 
+### Orchestration: planner, builder, orchestrator
+`orchestrator.ts` splits the job across three agents, each with only the tools its job needs:
+
+| Agent | Job | Tools |
+|---|---|---|
+| Planner | Turns a request into test cases (JSON) | `search_knowledge` |
+| Builder | Turns the approved cases into a passing collection | `search_knowledge`, `run_collection` |
+| Orchestrator | Runs plan -> human approval -> build -> publish | `Agent` (starts the others), `request_approval`, `postman_list_collections`, `postman_publish_collection` |
+
+The run pauses at the plan and waits for you to type `y`, or what to change. Publishing is refused in code unless a human approved the plan and the last run had zero failures.
+
+    npx tsx orchestrator.ts "what to test" [workspace id]
+
+`agent.ts` is the earlier single-agent version of the same job, kept for comparison. Shared tools live in `tools.ts`.
+
 ### Knowledge base (RAG)
 The agent is not given the API description up front. It looks things up with a `search_knowledge` tool:
 

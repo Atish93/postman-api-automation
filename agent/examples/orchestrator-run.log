@@ -1,0 +1,120 @@
+
+[orchestrator -> planner] {"description":"Plan booking date filter tests","subagent_type":"planner","run_in_background":false,"prompt":"Create a structured API test plan for this request…
+
+[planner -> mcp__qa__search_knowledge] {"query":"GET /booking checkin checkout query filter date format semantics"}…
+[retrieved] "GET /booking checkin checkout query filter date format semantics" -> GET /booking (GetBookingIds) | GET /booking/:id (GetBooking) | POST /booking (CreateBooking)
+
+[planner -> mcp__qa__search_knowledge] {"query":"test conventions setup cleanup naming collection"}…
+[retrieved] "test conventions setup cleanup naming collection" -> Cleanup | Test data | Naming requests
+
+[planner -> mcp__qa__search_knowledge] {"query":"create booking POST /booking body and delete booking auth token"}…
+[retrieved] "create booking POST /booking body and delete booking auth token" -> POST /auth (CreateToken) | POST /booking (CreateBooking) | DELETE /booking/1 (DeleteBooking)
+
+[planner -> mcp__qa__search_knowledge] {"query":"invalid date format query parameter error response, known quirks of booking date filters"}…
+[retrieved] "invalid date format query parameter error response, known quirks of booking date filters" -> GET /booking (GetBookingIds) | POST /booking (CreateBooking) | PUT /booking/:id (UpdateBooking)
+
+[orchestrator -> mcp__qa__request_approval] {"plan_summary":"Collection: \"Restful-Booker Checkin/Checkout Date Filter Tests (agent-built)\"\n\nTC01 (setup) POST /auth: log in as admin and save the token.…
+
+================ PLAN FOR REVIEW ================
+Collection: "Restful-Booker Checkin/Checkout Date Filter Tests (agent-built)"
+
+TC01 (setup) POST /auth: log in as admin and save the token. Expect 200 and a non-empty token.
+TC02 (setup) POST /booking: create a booking with a unique name, check-in 2027-06-10 and check-out 2027-06-15. Expect 200 and save bookingId.
+TC03 (positive) GET /booking?checkin=2027-06-09 (one day before check-in): the booking should be in the results.
+TC04 (edge) GET /booking?checkin=2027-06-10 (same day as check-in, docs say ">="): the booking should be in the results.
+TC05 (negative) GET /booking?checkin=2027-06-11 (one day after check-in): the booking should NOT be in the results.
+TC06 (positive) GET /booking?checkout=2027-06-14 (one day before check-out): the booking should be in the results.
+TC07 (edge) GET /booking?checkout=2027-06-15 (same day as check-out, docs say ">="): the booking should be in the results.
+TC08 (negative) GET /booking?checkout=2027-06-16 (one day after check-out): the booking should NOT be in the results.
+TC09 (positive) GET /booking?checkin=2027-06-10&checkout=2027-06-15 (both exact dates): the booking should be in the results.
+TC10 (negative) GET /booking?checkin=2027-06-01&checkout=2027-06-16 (check-in matches, check-out does not): the booking should NOT be in the results.
+TC11 (edge) GET /booking?checkin=2999-01-01 (far future): expect 200 and an empty list [].
+TC12 (edge) GET /booking?checkout=2999-01-01 (far future): expect 200 and an empty list [].
+TC13 (cleanup) DELETE /booking/{{bookingId}} using the token cookie: expect 201.
+TC14 (cleanup) GET /booking/{{bookingId}}: expect 404, which confirms the booking was deleted.
+
+Notes: these cases follow the docs, which say both filters match dates ">=" the given date. If the live API behaves differently, the run will flag that as a gap between the docs and the API. For filters that don't pin down one booking, the cases only check whether our booking is present or absent, because the server is shared.
+=================================================
+Approve this plan? Type y to approve, or type what to change: 
+[orchestrator -> mcp__qa__postman_list_collections] {"workspace_id":"a4ac7a19-b10d-4f2d-8621-68f6b79122b5"}…
+
+[orchestrator -> planner] {"description":"Revise date filter plan","subagent_type":"planner","run_in_background":false,"prompt":"Revise an API test plan for: \"Test the checkin and check…
+
+[planner -> mcp__qa__search_knowledge] {"query":"GET /booking checkin checkout filter combined query parameters"}…
+[retrieved] "GET /booking checkin checkout filter combined query parameters" -> GET /booking (GetBookingIds) | GET /booking/:id (GetBooking) | POST /booking (CreateBooking)
+
+[planner -> mcp__qa__search_knowledge] {"query":"test naming conventions setup cleanup ordering"}…
+[retrieved] "test naming conventions setup cleanup ordering" -> Cleanup | Test data | Naming requests
+
+[orchestrator -> mcp__qa__request_approval] {"plan_summary":"Collection: \"Restful-Booker Checkin/Checkout Date Filter Tests (agent-built)\" (revised to add a case that sends both filters in one request)\…
+
+================ PLAN FOR REVIEW ================
+Collection: "Restful-Booker Checkin/Checkout Date Filter Tests (agent-built)" (revised to add a case that sends both filters in one request)
+
+TC01 (setup) POST /auth: log in as admin and save the token. Expect 200.
+TC02 (setup) POST /booking: create a booking with check-in 2027-06-10 and check-out 2027-06-15. Expect 200 and save bookingId.
+TC03 (positive) GET /booking?checkin=2027-06-09: the booking should be in the results.
+TC04 (edge) GET /booking?checkin=2027-06-10 (equal date, ">="): the booking should be in the results.
+TC05 (negative) GET /booking?checkin=2027-06-11: the booking should NOT be in the results.
+TC06 (positive) GET /booking?checkout=2027-06-14: the booking should be in the results.
+TC07 (edge) GET /booking?checkout=2027-06-15 (equal date, ">="): the booking should be in the results.
+TC08 (negative) GET /booking?checkout=2027-06-16: the booking should NOT be in the results.
+TC09 (positive, BOTH filters in one request) GET /booking?checkin=2027-06-10&checkout=2027-06-15: the booking should be in the results.
+TC10 (negative, BOTH filters in one request) GET /booking?checkin=2027-06-01&checkout=2027-06-16 (check-out does not match): the booking should NOT be in the results.
+TC11 (edge) GET /booking?checkin=2999-01-01 (far future): expect 200 and an empty list [].
+TC12 (edge) GET /booking?checkout=2999-01-01 (far future): expect 200 and an empty list [].
+TC13 (edge, NEW, BOTH filters in one request) GET /booking?checkin=2999-01-01&checkout=2999-01-10 (both far future): expect 200 and an empty list [].
+TC14 (cleanup) DELETE /booking/{{bookingId}} using the token cookie: expect 201.
+TC15 (cleanup) GET /booking/{{bookingId}}: expect 404, which confirms the booking was deleted.
+
+Assumption: when both filters are sent, a booking must match both of them to be returned.
+=================================================
+Approve this plan? Type y to approve, or type what to change: 
+[orchestrator] The plan was approved, and the collection name isn't already used in the workspace. Passing it to the builder.
+
+[orchestrator -> builder] {"description":"Build and run collection","subagent_type":"builder","run_in_background":false,"prompt":"Build a Postman collection from this human-approved test…
+
+[builder -> mcp__qa__search_knowledge] {"query":"team test conventions for Postman collections"}…
+[retrieved] "team test conventions for Postman collections" -> Test data | Order of assertions | PUT /booking/:id (UpdateBooking)
+
+[builder -> mcp__qa__search_knowledge] {"query":"GET /booking filter checkin checkout"}…
+[retrieved] "GET /booking filter checkin checkout" -> GET /booking (GetBookingIds) | GET /booking/:id (GetBooking) | POST /booking (CreateBooking)
+
+[builder -> mcp__qa__search_knowledge] {"query":"base URL, auth, delete booking headers"}…
+[retrieved] "base URL, auth, delete booking headers" -> DELETE /booking/1 (DeleteBooking) | POST /auth (CreateToken) | PUT /booking/:id (UpdateBooking)
+
+[builder -> mcp__qa__search_knowledge] {"query":"collection variables baseUrl naming requests environment"}…
+[retrieved] "collection variables baseUrl naming requests environment" -> Variables | Naming requests | Cleanup
+
+[builder -> mcp__qa__search_knowledge] {"query":"cleanup, response time, schema checks, conventions for negative tests"}…
+[retrieved] "cleanup, response time, schema checks, conventions for negative tests" -> Test data | Cleanup | Naming requests
+
+[builder -> mcp__qa__run_collection] {"collection_json":"{\"info\":{\"name\":\"Restful-Booker Checkin/Checkout Date Filter Tests (agent-built)\",\"schema\":\"https://schema.getpostman.com/json/coll…
+[newman] 15 requests, 6/40 assertions failed
+
+[orchestrator] I didn't publish the collection: the test run had 6 failed checks out of 40, and the failures point to two real bugs in the API.
+
+**Collection:** "Restful-Booker Checkin/Checkout Date Filter Tests (agent-built)". The name isn't used yet in the workspace. You rejected the first plan and approved the second, which adds a case sending both check-in and check-out filters in one request (TC13).
+
+**Run results:** 15 requests, 40 checks, 34 passed and 6 failed. The setup worked, and cleanup deleted the test booking (id 2105), confirmed by a 404 when reading it again.
+
+**API bugs.** The docs say both filters return bookings dated on or after the date you give:
+
+1. **The check-in filter leaves out the date you give it.** It acts as "after", not "on or after".
+   - TC04, `checkin=2027-06-10`: the booking is missing from the results.
+   - TC09, `checkin=2027-06-10&checkout=2027-06-15`: returned `[]`.
+   - One day earlier, `checkin=2027-06-09` (TC03), does return the booking.
+2. **The check-out filter works backwards.** It returns bookings that check out on or before the date, not on or after.
+   - TC06, `checkout=2027-06-14`: the booking is missing.
+   - TC08, `checkout=2027-06-16`: the booking is included.
+   - TC10, `checkin=2027-06-01&checkout=2027-06-16`: returned `[{"bookingid":2105}]`.
+   - TC12, far-future `checkout=2999-01-01`: returned 1,479 ids, apparently every booking on the server, instead of `[]`.
+   - TC07 (`checkout=2027-06-15`) passed only because "on or before" also includes the same day.
+
+**Far-future dates:** The two far-future cases with a check-in date (TC11 alone and TC13 combined) correctly returned nothing. The check-out-only case (TC12) did not, because of bug 2.
+
+**To publish, choose one:**
+- Get the API fixed and run the collection again.
+- Change the plan so the checks match how the API actually behaves now. That would mean the passing collection hides these bugs.
+
+[done] success, 7 turns, $0.877
