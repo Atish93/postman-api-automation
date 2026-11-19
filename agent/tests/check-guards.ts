@@ -9,10 +9,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // ---- Fake server: its behaviour is switched per check ----
-let mode: "all404" | "ping503" | "server500" = "all404";
+// all404: every route but /ping answers 404.   one500: like all404, but the checkin filter crashes with 500.
+// server500: every route but /ping answers 500. ping503: the health check fails too.
+let mode: "all404" | "one500" | "server500" | "ping503" = "all404";
 const server = createServer((req, res) => {
   if (req.url === "/ping") return res.writeHead(mode === "ping503" ? 503 : 201).end("Created");
-  if (mode === "server500") return res.writeHead(500).end("Internal Server Error");
+  if (mode === "server500" || mode === "ping503") return res.writeHead(500).end("Internal Server Error");
+  if (mode === "one500" && req.url?.includes("checkin=")) return res.writeHead(500).end("Internal Server Error");
   res.writeHead(404).end("Not Found");
 });
 await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -25,6 +28,7 @@ const cfg = {
   ...real,
   environments: { ...real.environments, mock: { label: "Mock", baseUrl: `http://127.0.0.1:${port}`, healthPath: "/ping" } },
   circuitBreaker: { minFailingRequests: 5, failingRequestPercent: 15 },
+  serverErrors: { terminateAtPercent: 80, minRequests: 3, recheckAfterSeconds: 0 },
   limits: { healsPerRun: 2, newKnownBugsPerRun: 1, attemptsPerRequest: 2 },
 };
 writeFileSync(join(dir, "qa.config.json"), JSON.stringify(cfg));
@@ -113,6 +117,16 @@ check("probes to other hosts are refused", r.error && r.text.includes("may be pr
 // ================= Against the fake server (Mock environment) =================
 selectEnvironment("mock");
 
+console.log("\n-- A single 5xx is a failure to debug, not an outage --");
+mode = "one500";
+t.loadCollectionFile(fixture);
+r = await call(t.rerunCollection);
+const one = r.error ? null : JSON.parse(r.text);
+check("one 500 does not terminate the run", !r.error && !t.abortController.signal.aborted, r.text.slice(0, 200));
+check("the 500 is reported as a failure", one?.failed_requests.some((f: any) => f.request.startsWith("05b") && f.status === 500), r.text.slice(0, 300));
+r = await call(t.sendRequest, { method: "GET", url: `http://127.0.0.1:${port}/booking?checkin=2027-01-01` });
+check("a probe's 500 goes back to the debugger as evidence", !r.error && r.text.includes('"status": 500') && !t.abortController.signal.aborted, r.text.slice(0, 200));
+
 console.log("\n-- Health check before any agent starts --");
 mode = "ping503";
 const health = await t.checkServerHealth();
@@ -132,11 +146,11 @@ r = await call(t.markKnownBugs);
 check("marking is refused while tripped", r.error && r.text.includes("circuit breaker"));
 check("program reports the breaker for its exit code", t.breakerState() === true);
 
-console.log("\n-- Server errors (everything except /ping answers 500) --");
+console.log("\n-- Outage: everything except /ping answers 500, in two runs --");
 mode = "server500";
 t.loadCollectionFile(fixture);
 r = await call(t.rerunCollection);
-check("a 5xx terminates the run with the message", r.error && r.text.includes("TERMINATED: Facing server issues, please check Mock Env"), r.text.slice(0, 200));
+check("a confirmed outage terminates the run with the message", r.error && r.text.includes("TERMINATED: Facing server issues, please check Mock Env") && r.text.includes("two runs in a row"), r.text.slice(0, 300));
 check("the agent run is aborted", t.abortController.signal.aborted);
 r = await call(t.runStatus);
 check("every later tool call is refused", r.error && r.text.startsWith("TERMINATED"));

@@ -1,12 +1,13 @@
-Environment: Mock (http://127.0.0.1:35245)
+Environment: Mock (http://127.0.0.1:33049)
 
 [orchestrator -> load_published_collection] {"collection_uid":"12101599-18d4ef8a-32a0-42ac-a6ed-0f7b854d0252"}…
 
 [orchestrator -> rerun_collection] {}…
+[server] 10 of 11 requests got a server error, e.g. "02 Login - valid credentials" -> 500; "03 Login - wrong password (negative)" -> 500; "04 Create booking" -> 500. Health check passes; running again in 15s to rule out a blip.
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 Facing server issues, please check Mock Env
-10 request(s) got a server error, e.g. "02 Login - valid credentials" -> 500; "03 Login - wrong password (negative)" -> 500; "04 Create booking" -> 500
+10 of 11 requests got a server error, e.g. "02 Login - valid credentials" -> 500; "03 Login - wrong password (negative)" -> 500; "04 Create booking" -> 500, in two runs in a row.
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 [orchestrator -> run_status] {}…
@@ -15,6 +16,6 @@ Facing server issues, please check Mock Env
 
 Run terminated.
 Facing server issues, please check Mock Env
-10 request(s) got a server error, e.g. "02 Login - valid credentials" -> 500; "03 Login - wrong password (negative)" -> 500; "04 Create booking" -> 500
+10 of 11 requests got a server error, e.g. "02 Login - valid credentials" -> 500; "03 Login - wrong password (negative)" -> 500; "04 Create booking" -> 500, in two runs in a row.
 
 Orchestrator exit code: 2

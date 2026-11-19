@@ -1,0 +1,74 @@
+Environment: Mock (http://127.0.0.1:40055)
+
+[orchestrator -> load_published_collection] {"collection_uid":"12101599-18d4ef8a-32a0-42ac-a6ed-0f7b854d0252"}…
+
+[orchestrator -> rerun_collection] {}…
+[server] 1 of 11 requests got a server error, e.g. "KNOWN BUG - 05b Filter by checkin date (same day)" -> 500. Not an outage (health check passes): treating them as failures to debug.
+[newman] 11 requests, 2/20 assertions failed
+
+[orchestrator -> run_status] {}…
+
+[orchestrator -> debugger] {"subagent_type":"debugger","description":"Diagnose 05b status failure","run_in_background":false,"prompt":"Diagnose exactly one failed assertion in the working…
+
+[debugger -> get_request] {"request_name":"KNOWN BUG - 05b Filter by checkin date (same day)"}…
+
+[debugger -> search_knowledge] {"query":"GET /booking checkin filter same day 500"}…
+[retrieved] "GET /booking checkin filter same day 500" -> Known API bug: GET /booking?checkin=YYYY-MM-DD leaves out bookings whose checkin equals the given date (it acts as strictly after), although the docs say on or after. | GET /booking (GetBookingIds) | GET /booking/:id (GetBooking)
+
+[debugger -> send_request] {"method":"GET","url":"http://127.0.0.1:40055/booking?checkin=2027-01-01","headers":{"Accept":"application/json"}}…
+[probe] GET http://127.0.0.1:40055/booking?checkin=2027-01-01 -> 500
+
+[debugger -> send_request] {"method":"GET","url":"http://127.0.0.1:40055/booking?checkin=2026-12-31","headers":{"Accept":"application/json"}}…
+[probe] GET http://127.0.0.1:40055/booking?checkin=2026-12-31 -> 500
+
+[debugger -> get_run_details] {"request_name":"KNOWN BUG - 05b Filter by checkin date (same day)"}…
+
+[debugger -> send_request] {"method":"GET","url":"http://127.0.0.1:40055/booking","headers":{"Accept":"application/json"}}…
+[probe] GET http://127.0.0.1:40055/booking -> 200
+
+[debugger -> send_request] {"method":"GET","url":"http://127.0.0.1:40055/booking?checkout=2027-01-01","headers":{"Accept":"application/json"}}…
+[probe] GET http://127.0.0.1:40055/booking?checkout=2027-01-01 -> 200
+
+[debugger -> send_request] {"method":"GET","url":"http://127.0.0.1:40055/booking?firstname=Sally","headers":{"Accept":"application/json"}}…
+[probe] GET http://127.0.0.1:40055/booking?firstname=Sally -> 200
+
+[debugger -> send_request] {"method":"GET","url":"http://127.0.0.1:40055/booking?checkin=2014-03-13"}…
+[probe] GET http://127.0.0.1:40055/booking?checkin=2014-03-13 -> 500
+
+[debugger -> record_diagnosis] {"request":"KNOWN BUG - 05b Filter by checkin date (same day)","assertion":"Status is 200","category":"api_bug","confidence":"high","evidence":"This is NOT the …
+[diagnosis] api_bug (high): KNOWN BUG - 05b Filter by checkin date (same day) / Status is 200
+
+[orchestrator -> mark_known_bugs] {}…
+
+[orchestrator] The debugger found a new API bug on 05b: the checkin filter now returns 500 for every date. I've added that evidence to the request, and I'm re-running so the collection can be saved.
+
+[orchestrator -> rerun_collection] {}…
+[server] 1 of 11 requests got a server error, e.g. "KNOWN BUG - 05b Filter by checkin date (same day)" -> 500. Not an outage (health check passes): treating them as failures to debug.
+[newman] 11 requests, 2/20 assertions failed
+
+[orchestrator -> run_status] {}…
+
+[orchestrator -> postman_update_collection] {}…
+
+[orchestrator] Nothing was written back to Postman: this is a dry run (`QA_DRY_RUN=1`), so the save was refused and the published collection is unchanged. The re-check also found a new API bug.
+
+**Regression Demo - Booking Lifecycle (agent-built)** (`12101599-18d4ef8a-32a0-42ac-a6ed-0f7b854d0252`)
+
+- **Environment:** Mock.
+- **Before:** fail. 10 of 11 requests passed, and 2 of 20 assertions failed, both on one request: `KNOWN BUG - 05b Filter by checkin date (same day)`.
+- **After:** fail, with the same 2 assertions. Both are now recorded as known bugs, so the collection could be saved in a real run.
+- **Known bug still failing:** "Booking checking in on that day is included" on 05b. It now fails only because the server's 500 response isn't JSON, so the test can't read it.
+- **New API bug (high confidence):** the `checkin` filter now returns 500 "Internal Server Error" for every date, not just same-day check-ins. The bug recorded before was different: the API returned 200 but left out bookings checking in on that day.
+  - **Evidence:** `GET /booking?checkin=2027-01-01`, `checkin=2026-12-31` and `checkin=2014-03-13` (the date from the API docs example) all return 500.
+  - **Other filters still work:** no filter, `?checkout=2027-01-01` and `?firstname=Sally` all return 200.
+  - **Docs:** they list `checkin` as a valid optional parameter that should return 200.
+  - **Recorded:** the evidence was added to the 05b request's description under its existing "KNOWN BUG" name.
+- **Healer changes:** none. Nothing was diagnosed as a test problem.
+- **Known bugs now passing:** none.
+- **Knowledge base:** nothing saved. Learning is switched off for this run, so the debugger's lesson was not stored. The lesson: test a date that isn't a same-day check-in to tell the new crash apart from the old bug.
+
+To publish the update with the new evidence, run the collection again with `QA_DRY_RUN` turned off. Someone should also look at the `checkin` filter on the API side, since it may be a regression.
+
+[done] success, 9 turns, $0.197
+
+Orchestrator exit code: 0

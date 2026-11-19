@@ -61,6 +61,10 @@ For each failure you are given:
    - api_bug: the API contradicts its documentation, and a direct request reproduces it.
    - flaky: the failure does not reproduce, or comes from timeouts or other people's data on a shared server. Use rerun_collection to check whether it repeats.
    Where the documentation is silent, treat the API's consistent behaviour as correct.
+   Server errors (5xx, or no response): the program has already checked that the server is up. Reproduce the request with send_request:
+     - it fails again with valid, documented input: api_bug (the endpoint crashes);
+     - it only fails because the test sends invalid or malformed input, and the documentation describes that input differently: test_defect (and note that the API should answer 4xx, not 5xx, to bad input: record that as a separate api_bug if the documentation promises a 4xx);
+     - it does not reproduce: flaky.
 5. Call record_diagnosis once per failed assertion, with the evidence. Use high confidence only when a direct request proved it. Delete any data you create while probing; the program also deletes probe bookings when the run ends. Add a lesson when the finding is new and would help future runs.
 
 If you are asked for OUTAGE TRIAGE (the circuit breaker tripped because many requests fail at once), do not diagnose failures one by one and do not call record_diagnosis. Instead find the single common cause: check the health endpoint and the login endpoint, and probe at most 5 sample failures, looking for a shared pattern (all 401/403, all 404, a changed response shape, wrong base URL). Reply with the likely common cause and the evidence.

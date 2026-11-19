@@ -2,7 +2,8 @@
 // Each agent is given only the tools its job needs (see agents.ts).
 //
 // The important rules live here, in code, so no agent - whatever model it runs on - can get past them:
-//   - any 5xx response or unreachable server terminates the whole run
+//   - the run terminates only when the server itself is down: the health check fails, or most
+//     requests get server errors in two runs in a row. A few 5xx responses are failures to debug.
 //   - when too many requests fail at once (circuit breaker), nothing may be healed, marked or saved
 //   - the healer may only change requests the debugger diagnosed as a test defect, never an API bug
 //   - a change to an assertion, URL or method needs a human's approval
@@ -207,7 +208,10 @@ async function newmanRun() {
   );
 }
 
-async function runWorkingCollection(): Promise<any> {
+const isServerError = (d: Detail) => (d.status ?? 0) >= 500 || !!d.error;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function runWorkingCollection(confirming = false): Promise<any> {
   if (state.serverIssue) return { terminated: stopForServerIssue("") };
   const summary = await newmanRun();
   mkdirSync("runs", { recursive: true });
@@ -226,20 +230,35 @@ async function runWorkingCollection(): Promise<any> {
     });
   }
 
-  // 5xx or no response at all: the server is the problem, not the tests.
-  const serverErrors = [...state.details].filter(([, d]) => (d.status ?? 0) >= 500 || d.error);
+  // Server errors (5xx or no response). Terminate only if the server itself looks down:
+  // the health check fails, or most requests got server errors in this run AND a re-run.
+  // Otherwise they are ordinary failures for the debugger: often a real API bug.
+  const serverErrors = [...state.details].filter(([, d]) => isServerError(d));
   if (serverErrors.length) {
-    return {
-      terminated: stopForServerIssue(
-        `${serverErrors.length} request(s) got a server error, e.g. ` +
-          serverErrors.slice(0, 3).map(([name, d]) => `"${name}" -> ${d.status ?? d.error}`).join("; "),
-      ),
-    };
+    const total = state.details.size;
+    const { terminateAtPercent, minRequests, recheckAfterSeconds } = config.serverErrors;
+    const mostFailing = serverErrors.length >= Math.max(Math.min(minRequests, total), Math.ceil((total * terminateAtPercent) / 100));
+    const summaryLine =
+      `${serverErrors.length} of ${total} requests got a server error, e.g. ` +
+      serverErrors.slice(0, 3).map(([name, d]) => `"${name}" -> ${d.status ?? d.error}`).join("; ");
+    const health = await checkServerHealth();
+    if (health) return { terminated: stopForServerIssue(`${health.split("\n").slice(1).join(" ")}\n${summaryLine}`) };
+    if (mostFailing && confirming) return { terminated: stopForServerIssue(`${summaryLine}, in two runs in a row.`) };
+    if (mostFailing) {
+      console.log(`[server] ${summaryLine}. Health check passes; running again in ${recheckAfterSeconds}s to rule out a blip.`);
+      await sleep(recheckAfterSeconds * 1000);
+      return runWorkingCollection(true);
+    }
+    console.log(`[server] ${summaryLine}. Not an outage (health check passes): treating them as failures to debug.`);
   }
 
-  const failures: Failure[] = [...state.details].flatMap(([request, d]) =>
-    d.assertions.filter((a) => a.error).map((a) => ({ request, assertion: a.name, error: a.error! })),
-  );
+  const failures: Failure[] = [...state.details].flatMap(([request, d]) => {
+    const failed = d.assertions.filter((a) => a.error).map((a) => ({ request, assertion: a.name, error: a.error! }));
+    // A server error with no failing assertion (e.g. no response, so no test ran) must still count as a failure.
+    if (isServerError(d) && !failed.length)
+      failed.push({ request, assertion: "Server responded without error", error: d.error ?? `status ${d.status}` });
+    return failed;
+  });
   const failing = new Set(failures.map((f) => f.request));
   state.lastRun = {
     failures,
@@ -377,11 +396,16 @@ export const sendRequest = tool(
     try {
       res = await fetch(url, { method, headers, body, signal: AbortSignal.timeout(30_000) });
     } catch (e: any) {
-      return text(stopForServerIssue(`Probe ${method} ${url} failed: ${e.cause?.code ?? e.message}`), true);
+      const health = await checkServerHealth();
+      if (health) return text(stopForServerIssue(`${health.split("\n").slice(1).join(" ")} Probe ${method} ${url} also failed: ${e.cause?.code ?? e.message}`), true);
+      return text(`No response: ${e.cause?.code ?? e.message}. The health check still passes, so the server is up; this endpoint did not answer.`, true);
     }
     const resBody = await res.text();
     console.log(`[probe] ${method} ${url} -> ${res.status}`);
-    if (res.status >= 500) return text(stopForServerIssue(`Probe ${method} ${url} answered ${res.status}`), true);
+    if (res.status >= 500) {
+      const health = await checkServerHealth();
+      if (health) return text(stopForServerIssue(`${health.split("\n").slice(1).join(" ")} Probe ${method} ${url} answered ${res.status}.`), true);
+    }
     // Remember bookings the debugger creates, so cleanupProbes() can delete them even if it forgets.
     if (method === "POST" && new URL(url).pathname === "/booking" && res.ok) {
       try {
@@ -389,7 +413,10 @@ export const sendRequest = tool(
         if (typeof id === "number") state.probeBookings.push(id);
       } catch {}
     }
-    return text(JSON.stringify({ status: res.status, content_type: res.headers.get("content-type"), body: resBody.slice(0, 1500) }, null, 2));
+    return text(JSON.stringify({
+      status: res.status, content_type: res.headers.get("content-type"), body: resBody.slice(0, 1500),
+      ...(res.status >= 500 && { note: "Server error, but the health check passes: the server is up and this endpoint failed. Find out whether this input should be valid." }),
+    }, null, 2));
   },
 );
 
@@ -548,10 +575,24 @@ export const markKnownBugs = tool(
   {},
   async () => {
     if (breakerTripped()) return text(BREAKER_REFUSAL, true);
-    const buggy = [...new Set(state.diagnoses.filter((d) => d.category === "api_bug").map((d) => d.request))]
+    const bugDiagnoses = state.diagnoses.filter((d) => d.category === "api_bug");
+    // Requests already marked that now fail a different assertion: add that evidence, so later runs
+    // recognise it as a known-bug repeat instead of investigating it again.
+    const extended: string[] = [];
+    for (const d of bugDiagnoses) {
+      const r = findRequest(d.request);
+      if (!r?.name.startsWith(KNOWN_BUG_PREFIX) || (r.request.description ?? "").includes(`- ${d.assertion}:`)) continue;
+      r.request.description = `${r.request.description ?? ""}\n- ${d.assertion}: ${d.evidence}`;
+      extended.push(`${r.name} (${d.assertion})`);
+    }
+    if (extended.length) state.dirty = true;
+    const buggy = [...new Set(bugDiagnoses.map((d) => d.request))]
       .map((name) => findRequest(name))
       .filter((r) => r && !r.name.startsWith(KNOWN_BUG_PREFIX));
-    if (!buggy.length) return text("Nothing to mark: every API bug was already marked. No need to run again.");
+    if (!buggy.length)
+      return text(extended.length
+        ? `No new requests to mark. Added new evidence to:\n${extended.join("\n")}\nRun the collection again before saving.`
+        : "Nothing to mark: every API bug was already marked. No need to run again.");
     const limit = config.limits.newKnownBugsPerRun;
     if (buggy.length > limit) {
       console.log(`\n========== ${buggy.length} NEW KNOWN BUGS (limit ${limit}) ==========\n${buggy.map((r) => r.name).join("\n")}`);
@@ -602,6 +643,7 @@ export const publishCollection = tool(
   "Publish the working collection as a new collection in a Postman workspace. Refuses unless a human approved the plan and every failure in the latest run is a marked known API bug.",
   { workspace_id: z.string() },
   async ({ workspace_id }) => {
+    if (process.env.QA_DRY_RUN === "1") return text("Refused: this is a dry run (QA_DRY_RUN=1), so nothing is written to Postman.", true);
     if (!state.approved) return text("Refused: no human has approved a plan.", true);
     const blocked = canShip();
     if (blocked) return text(`Refused: ${blocked}.`, true);
@@ -615,6 +657,7 @@ export const updatePublishedCollection = tool(
   "Save the working collection back over the published collection it was loaded from. Refuses unless every failure in the latest run is a marked known API bug.",
   {},
   async () => {
+    if (process.env.QA_DRY_RUN === "1") return text("Refused: this is a dry run (QA_DRY_RUN=1), so nothing is written to Postman.", true);
     if (!state.source) return text("Refused: the working collection was not loaded from Postman.", true);
     if (JSON.stringify(state.collection) === state.loadedSnapshot) return text("Nothing changed since it was downloaded, so nothing was saved.");
     const blocked = canShip();

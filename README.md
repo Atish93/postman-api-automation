@@ -39,6 +39,7 @@ Exit codes, for CI: `0` finished, `2` server issues, `3` circuit breaker tripped
 
 ### Settings: `qa.config.json`
 - `environments`: base URL and health-check path for `test`, `stg` and `prod`. Fill in `stg` and `prod` before using them.
+- `serverErrors`: when the run is treated as an outage instead of failures to debug (see below). `recheckAfterSeconds` is the wait before the confirming re-run.
 - `circuitBreaker`: the run stops repairing when this many requests need diagnosis at once: `minFailingRequests` or `failingRequestPercent`% of the collection, whichever is larger, and never more than half the collection. With the defaults: 11 requests trips at 6, 50 at 10, 200 at 30.
 - `limits`: per run, at most `healsPerRun` changed requests, `attemptsPerRequest` changes to one request, and `newKnownBugsPerRun` new known bugs without a person's approval.
 - `models`: `default`, plus optional `planner`, `builder`, `debugger`, `healer`, `orchestrator` to give one agent a different model. Run the model exam before changing one.
@@ -46,7 +47,7 @@ Exit codes, for CI: `0` finished, `2` server issues, `3` circuit breaker tripped
 ### Rules enforced in code
 These live in `tools.ts`, so they hold whatever model an agent runs on:
 
-- **Server issues stop everything.** A health check runs before any agent starts. During the run, any 5xx response or unreachable server (in a collection run or a debugger probe) cancels the run with `Facing server issues, please check <Test/Stg/Prod> Env`.
+- **Only a real outage stops the run.** A health check runs before any agent starts. During the run, server errors (5xx or no response) end the run with `Facing server issues, please check <Test/Stg/Prod> Env` (exit code 2) only when the server itself looks down: the health check fails, or at least 80% of requests (and at least 3) get server errors in a run *and* in a re-run 15 seconds later. Fewer server errors are ordinary failures: the debugger reproduces them and labels them an API bug (the endpoint crashes on valid input), a test defect (the test sends bad input) or flaky (it doesn't reproduce).
 - **Circuit breaker.** When too many requests fail at once, the debugger only looks for the common cause (outage triage). Healing, marking and saving are refused.
 - **Proof or revert.** A healer change is kept only if the next run shows its request passing and nothing else newly failing. Otherwise it is undone automatically.
 - **Approval.** Changing an assertion line, a URL or a method waits for you to type `y`. With nobody to answer (CI, or the model exam), it is refused.
@@ -60,7 +61,7 @@ These live in `tools.ts`, so they hold whatever model an agent runs on:
 ### Checking it
 - `npm run check`: checks every rule above directly, with no agents and no cost. Uses a fake server on your machine for the 5xx and circuit-breaker cases.
 - `npm run eval [-- --model <model id>]`: **the model exam.** Runs the debugger and healer on collections with known faults (`eval/fixtures/`) and scores them; earlier findings are hidden so the answers can't be looked up. Run it before switching an agent to a different model. Roughly $0.30–0.60 per run.
-- `npm run drill -- 500|404 <collection uid>`: an outage drill with the real agents against a fake server: `500` should end with "Facing server issues", `404` with the circuit breaker.
+- `npm run drill -- crash|500|404 <collection uid>`: drills with the real agents against a fake server. `crash` forwards to the real API but makes the checkin filter answer 500: it should be debugged as an API bug, not terminate. `500` (everything fails) should end with "Facing server issues". `404` should trip the circuit breaker. Drills are dry runs (`QA_DRY_RUN=1`): nothing is written to Postman or the knowledge base.
 - `npm run typecheck`
 
 `examples/` has logs of real runs.

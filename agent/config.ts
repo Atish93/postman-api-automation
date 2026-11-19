@@ -7,6 +7,7 @@ export type Config = {
   environments: Record<string, Environment>;
   defaultEnvironment: string;
   circuitBreaker: { minFailingRequests: number; failingRequestPercent: number };
+  serverErrors: { terminateAtPercent: number; minRequests: number; recheckAfterSeconds: number };
   limits: { healsPerRun: number; newKnownBugsPerRun: number; attemptsPerRequest: number };
   models: { default: string } & Record<string, string>;
 };

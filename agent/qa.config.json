@@ -5,6 +5,11 @@
     "prod": { "label": "Prod", "baseUrl": "", "healthPath": "/ping" }
   },
   "defaultEnvironment": "test",
+  "serverErrors": {
+    "terminateAtPercent": 80,
+    "minRequests": 3,
+    "recheckAfterSeconds": 15
+  },
   "circuitBreaker": {
     "minFailingRequests": 10,
     "failingRequestPercent": 15
