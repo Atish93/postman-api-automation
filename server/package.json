@@ -11,9 +11,11 @@
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "test": "tsx --test --test-timeout=150000 test/*.test.ts",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "seed:demo": "tsx scripts/seed-demo.ts"
   },
   "dependencies": {
+    "@fastify/static": "^10.1.11",
     "fastify": "^5.12.8",
     "newman": "^6.2.3",
     "zod": "^4.6.7"

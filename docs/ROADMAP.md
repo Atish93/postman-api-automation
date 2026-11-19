@@ -27,8 +27,8 @@ A web dashboard around the agent team in `agent/`: connect Postman collections, 
 |---|---|---|
 | 0 | Engine ready for a UI: events, approvals by another program, result file | **Done** |
 | 1 | Server + database: import collections, environments, plain runs, run history | **Done** (`server/`) |
-| 2 | Web UI: Dashboard, Collections, Environments, Runs (live log) | Next |
-| 3 | AI runs from the UI: regression/build, live log, approval buttons, cost | |
+| 2 | Web UI: Dashboard, Collections, Environments, Runs (live log) | **Done** (`web/`) |
+| 3 | AI runs from the UI: regression/build, live log, approval buttons, cost | Next (mostly done in phase 2) |
 | 4 | Email reports (summary + HTML report + link) and schedules | |
 | 5 | Data across environments: encrypted secrets, compare, copy values, test-data files | |
 | 6 | Hardening: logins, Postgres, job queue, Docker, deployment, backups, audit log | |
@@ -49,7 +49,9 @@ See `server/README.md`. The run manager already starts AI runs, streams their ev
 5. Run manager: plain runs through Newman, AI runs through the orchestrator; store results and stream progress.
 6. Tests for every endpoint.
 
-### 2. Web UI
+### 2. Web UI (done)
+See `web/README.md`. It already starts AI runs (regression), follows them live and answers approvals, so phase 3 is left with build mode from the UI (planner → plan approval → builder) and views of known bugs and healer changes across all runs.
+
 1. React app with routing and layout.
 2. Collections, Environments and Runs pages; a run's page shows the live log and results.
 3. Dashboard: pass rate over time, latest runs, open known bugs, healer changes, AI cost per week.

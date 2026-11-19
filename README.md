@@ -4,6 +4,11 @@ API test automation for the Restful-Booker demo API, built by hand and by a team
 
 - `agent/`: the agent team (below).
 - `server/`: the dashboard's API server: collections, environments, runs. See `server/README.md`.
+- `web/`: the dashboard itself. See `web/README.md`. Quick start:
+
+      cd agent && npm install
+      cd ../web && npm install && npm run build
+      cd ../server && npm install && npm start      # http://127.0.0.1:4000
 - `collection/`: the first hand-built collection.
 
 ## collection/

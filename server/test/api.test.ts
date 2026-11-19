@@ -216,6 +216,27 @@ test("approvals and cancelling: refused when the run isn't waiting or has finish
   assert.equal((await call("POST", `/api/runs/${id}/cancel`)).status, 409);
 });
 
+test("dashboard: headline figures, runs per day and open known bugs", async () => {
+  const d = (await call("GET", "/api/dashboard?days=14")).body;
+  assert.equal(d.daily.length, 14);
+  const today = d.daily.at(-1);
+  assert.equal(today.date, new Date().toISOString().slice(0, 10));
+  assert.ok(today.total >= 7);
+  assert.equal(today.total, today.passed + today.known_bugs + today.failed + today.server_issue + today.other);
+  assert.ok(today.pass_rate > 0 && today.pass_rate < 1);
+  assert.equal(d.this_week.runs, today.total);
+  assert.equal(d.last_week.runs, 0);
+  assert.equal(d.last_week.pass_rate, null);
+  assert.ok(d.known_bugs.some((b: any) => b.request === "02 Items"), JSON.stringify(d.known_bugs));
+  assert.ok(d.latest_runs.length > 0 && d.latest_runs[0].id > d.latest_runs.at(-1).id);
+  assert.equal((await call("GET", "/api/dashboard?days=2")).status, 400);
+});
+
+test("unknown API paths answer 404 as JSON", async () => {
+  const r = await call("GET", "/api/nope");
+  assert.equal(r.status, 404);
+});
+
 test("deleting a collection keeps its run history", async () => {
   const before = (await call("GET", `/api/runs?collection_id=${uploadedId}`)).body.map((r: any) => r.id);
   assert.ok(before.length > 0);
