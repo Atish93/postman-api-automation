@@ -4,6 +4,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export type DB = DatabaseSync;
 
@@ -80,7 +81,7 @@ const migrations: string[] = [
   `,
 ];
 
-export function openDb(path = process.env.QA_DB ?? new URL("../data/qa.db", import.meta.url).pathname): DB {
+export function openDb(path = process.env.QA_DB ?? fileURLToPath(new URL("../data/qa.db", import.meta.url))): DB {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");

@@ -7,6 +7,7 @@
 // Refuses to touch a database that already has collections, environments or runs.
 import { readFileSync } from "node:fs";
 import { openDb, now } from "../src/db.ts";
+import { fileURLToPath } from "node:url";
 
 const path = process.argv[2];
 if (!path || path.endsWith("qa.db")) {
@@ -29,7 +30,7 @@ const pick = <T,>(items: [T, number][]): T => {
   return items[0][0];
 };
 
-const root = new URL("../../", import.meta.url).pathname;
+const root = fileURLToPath(new URL("../../", import.meta.url));
 const requestsOf = (items: any[]): any[] => items.flatMap((i) => (i.item ? requestsOf(i.item) : [i]));
 const t0 = now();
 const addCollection = (file: string) => {

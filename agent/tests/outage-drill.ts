@@ -13,6 +13,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const [kind, uid] = process.argv.slice(2);
 if (!["crash", "500", "404"].includes(kind) || !uid) {
@@ -47,7 +48,7 @@ real.environments.mock = { label: "Mock", baseUrl: `http://127.0.0.1:${(server.a
 writeFileSync(join(dir, "qa.config.json"), JSON.stringify(real));
 
 const child = spawn("npx", ["tsx", "orchestrator.ts", "--env", "mock", "--regression", uid], {
-  cwd: new URL("..", import.meta.url).pathname,
+  cwd: fileURLToPath(new URL("..", import.meta.url)),
   env: { ...process.env, QA_CONFIG: join(dir, "qa.config.json"), QA_NO_LEARNING: "1", QA_DRY_RUN: "1" },
   stdio: ["ignore", "inherit", "inherit"],
 });

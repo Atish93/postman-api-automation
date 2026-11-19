@@ -7,6 +7,7 @@ import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // ---- Fake server: its behaviour is switched per check ----
 // all404: every route but /ping answers 404.   one500: like all404, but the checkin filter crashes with 500.
@@ -38,7 +39,7 @@ process.env.QA_NO_LEARNING = "1"; // keep test findings out of the knowledge bas
 
 const t = await import("../tools.ts");
 const { selectEnvironment } = await import("../config.ts");
-const fixture = new URL("../eval/fixtures/booking-lifecycle-faults.json", import.meta.url).pathname;
+const fixture = fileURLToPath(new URL("../eval/fixtures/booking-lifecycle-faults.json", import.meta.url));
 const x: any = {};
 const call = async (tool: any, input: any = {}) => {
   const r = await tool.handler(input, x);

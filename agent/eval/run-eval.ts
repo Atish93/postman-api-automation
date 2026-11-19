@@ -8,6 +8,7 @@
 // answers no approval prompts, and saves nothing to the knowledge base. Costs roughly $0.30-0.60 per run.
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 process.env.QA_NO_PROMPTS = "1";
 process.env.QA_NO_LEARNING = "1";
@@ -44,7 +45,7 @@ async function runAgent(name: string, prompt: string) {
   }
 }
 
-const dir = new URL("./fixtures/", import.meta.url).pathname;
+const dir = fileURLToPath(new URL("./fixtures/", import.meta.url));
 let allPassed = true;
 for (const file of readdirSync(dir).filter((f) => f.endsWith(".json") && !f.endsWith(".expected.json"))) {
   const expected = JSON.parse(readFileSync(dir + file.replace(".json", ".expected.json"), "utf8"));

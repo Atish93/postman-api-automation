@@ -7,6 +7,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeApi, fakePostman, fixtureCollection, POSTMAN_KEY } from "../../server/test/helpers.ts";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 let chromium: any;
@@ -22,7 +23,7 @@ const pm = await fakePostman();
 const dir = mkdtempSync(join(tmpdir(), "qa-e2e-"));
 const port = 4300 + Math.floor(Math.random() * 500);
 const server = spawn("npx", ["tsx", "src/index.ts"], {
-  cwd: new URL("../../server/", import.meta.url).pathname,
+  cwd: fileURLToPath(new URL("../../server/", import.meta.url)),
   env: { ...process.env, PORT: String(port), QA_DB: join(dir, "qa.db"), QA_RUNS_DIR: join(dir, "runs"), POSTMAN_API_BASE: pm.url, POSTMAN_API_KEY: "" },
   stdio: "ignore",
 });

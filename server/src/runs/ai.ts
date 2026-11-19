@@ -9,12 +9,13 @@ import { getSetting, type DB } from "../db.ts";
 import type { RunOutcome, RunRow } from "./manager.ts";
 import { statusFromFailures } from "./manager.ts";
 import { loadEnvironment } from "./environment.ts";
+import { fileURLToPath } from "node:url";
 
 type Emit = (type: string, data: Record<string, unknown>) => void;
 export type AiHandle = { done: Promise<RunOutcome>; answer: (text: string) => boolean; cancel: () => boolean };
 
-export const agentDir = () => process.env.QA_AGENT_DIR ?? new URL("../../../agent/", import.meta.url).pathname;
-const runsDir = () => process.env.QA_RUNS_DIR ?? new URL("../../data/runs/", import.meta.url).pathname;
+export const agentDir = () => process.env.QA_AGENT_DIR ?? fileURLToPath(new URL("../../../agent/", import.meta.url));
+const runsDir = () => process.env.QA_RUNS_DIR ?? fileURLToPath(new URL("../../data/runs/", import.meta.url));
 
 export function runAi(db: DB, run: RunRow, emit: Emit): AiHandle {
   const env = loadEnvironment(db, run.environment_id!);

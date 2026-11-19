@@ -12,6 +12,7 @@ import { collectionsRoutes } from "./routes/collections.ts";
 import { environmentsRoutes } from "./routes/environments.ts";
 import { runsRoutes } from "./routes/runs.ts";
 import { dashboardRoutes } from "./routes/dashboard.ts";
+import { fileURLToPath } from "node:url";
 
 export function buildApp(db: DB = openDb(), opts: { logger?: boolean } = {}) {
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 20 * 1024 * 1024 });
@@ -36,8 +37,10 @@ export function buildApp(db: DB = openDb(), opts: { logger?: boolean } = {}) {
 
   // The web app (web/dist, built with `npm run build` in web/), served from the same address.
   // Any non-API path gets index.html, so links into the app work on reload.
-  const webDist = process.env.QA_WEB_DIST ?? new URL("../../web/dist/", import.meta.url).pathname;
-  if (existsSync(webDist)) {
+  const webDist = process.env.QA_WEB_DIST ?? fileURLToPath(new URL("../../web/dist/", import.meta.url));
+  if (!existsSync(webDist)) {
+    app.get("/", async (_req, reply) => reply.type("text/html").send(NOT_BUILT(webDist)));
+  } else {
     // wildcard: files are looked up on disk per request, so rebuilding the web app needs no server restart.
     app.register(fastifyStatic, { root: webDist, wildcard: true });
     // App pages get index.html; a missing API path or file (e.g. /assets/x.js) is a real 404.
@@ -48,3 +51,13 @@ export function buildApp(db: DB = openDb(), opts: { logger?: boolean } = {}) {
   }
   return { app, db, runs };
 }
+
+// Shown at / when the web app hasn't been built, instead of a bare 404.
+const NOT_BUILT = (dir: string) => `<!doctype html><meta charset="utf-8"><title>QA Dashboard</title>
+<body style="font-family:system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem;line-height:1.5">
+<h1 style="font-size:1.4rem">The API is running, but the web app isn't built yet</h1>
+<p>Build it once, then restart the server (Ctrl+C, then <code>npm start</code>) and reload this page:</p>
+<pre style="background:#f0efec;padding:.75rem;border-radius:.5rem">cd web
+npm install
+npm run build</pre>
+<p style="color:#52514e">Looked for it in: <code>${dir.replace(/[<>&]/g, "")}</code></p></body>`;
