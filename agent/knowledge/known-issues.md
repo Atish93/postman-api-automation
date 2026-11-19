@@ -13,3 +13,8 @@ Found 2026-11-19 in "07 Update booking (full)".
 The docs for DELETE /booking/:id show the response "HTTP/1.1 201 Created". Probe: DELETE /booking/2081 with the Cookie token returned 201 "Created". In the run, the follow-up GET (request 10) returned 404, so the delete works. The test expects 200, which the docs do not support.
 Fix: Expect status 201 (Created) for a successful DELETE.
 Found 2026-11-19 in "09 Delete booking".
+
+## Test pitfall: Request 08 (PATCH /booking/:id) asserts totalprice 200, which depends on request 07 (PUT) succeeding first. If 07 fails, 08 fails as a consequence, so fix 07 rather than 08.
+Request 08 is correct. It failed because 07 never updated the price (07 got 403 for the missing token), so totalprice was still 150. Probe: after an authenticated PUT set totalprice to 200, PATCH /booking/1645 {"additionalneeds":"Late checkout"} with the Cookie token returned 200 with totalprice 200, firstname Asha and additionalneeds "Late checkout". So the PATCH works as documented.
+Fix: Do not change 08. Adding the Cookie token header to 07 fixes this.
+Found 2026-11-19 in "08 Update booking (partial)".

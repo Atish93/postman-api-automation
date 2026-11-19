@@ -53,12 +53,23 @@ async function postman(path: string, init: RequestInit = {}) {
   return JSON.parse(body);
 }
 
+let stdinReader: ReturnType<typeof createInterface> | null = null;
 let stdinLines: AsyncIterator<string> | null = null;
 async function askHuman(question: string): Promise<string | null> {
-  stdinLines ??= createInterface({ input: process.stdin })[Symbol.asyncIterator]();
+  if (!stdinReader) {
+    stdinReader = createInterface({ input: process.stdin });
+    stdinLines = stdinReader[Symbol.asyncIterator]();
+  }
   process.stdout.write(question);
-  const next = await stdinLines.next();
+  const next = await stdinLines!.next();
   return next.done ? null : next.value.trim(); // null: nobody can answer (e.g. in CI)
+}
+
+// An open stdin reader keeps Node alive after the work is done, so close it when the run ends.
+export function closeHuman() {
+  stdinReader?.close();
+  stdinReader = null;
+  stdinLines = null;
 }
 
 function requestsOf(items: any[] = []): any[] {

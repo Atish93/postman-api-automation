@@ -9,7 +9,7 @@
 // Re-check published ones:     npx tsx orchestrator.ts --regression [collection uid ...]
 //   (with no uids, regression checks every "(agent-built)" collection in the workspace)
 import { query, type AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
-import { qaServer, printMessage, cleanupProbes } from "./tools.ts";
+import { qaServer, printMessage, cleanupProbes, closeHuman } from "./tools.ts";
 
 const WORKSPACE_ID = "a4ac7a19-b10d-4f2d-8621-68f6b79122b5"; // "Practice Collection"
 const args = process.argv.slice(2);
@@ -133,6 +133,7 @@ const prompt = regression
     : `Re-check every collection whose name ends in "(agent-built)" in Postman workspace ${WORKSPACE_ID}. List them with postman_list_collections first.`
   : `Request: ${args[0] ?? "Test the checkin and checkout date filters on GET /booking."}\nPostman workspace id: ${args[1] ?? WORKSPACE_ID}`;
 
+let exitCode = 0;
 try {
 for await (const msg of query({
   prompt,
@@ -150,7 +151,18 @@ for await (const msg of query({
   },
 })) {
   printMessage(msg, "orchestrator");
+  if (msg.type === "result" && msg.subtype !== "success") exitCode = 1;
 }
+} catch (err) {
+  console.error(err);
+  exitCode = 1;
 } finally {
-  await cleanupProbes(); // delete probe bookings even if the run failed part-way
+  // Delete probe bookings even if the run failed part-way.
+  await cleanupProbes().catch((err) => {
+    console.error("Probe cleanup failed:", err);
+    exitCode = 1;
+  });
+  closeHuman();
+  // Newman and HTTP keep-alive sockets can also hold the event loop open; the run is over, so exit.
+  process.exit(exitCode);
 }
