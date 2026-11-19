@@ -211,7 +211,11 @@ async function newmanRun() {
       {
         collection: state.collection,
         reporters: [],
-        envVar: [{ key: "baseUrl", value: env().baseUrl }], // the chosen environment's URL wins over the collection's
+        // The chosen environment's values win over the collection's own variables.
+        envVar: [
+          ...Object.entries(env().variables ?? {}).map(([key, value]) => ({ key, value })),
+          { key: "baseUrl", value: env().baseUrl },
+        ],
         timeoutRequest: 30_000,
       },
       (err: unknown, s: unknown) => (err ? reject(err) : resolve(s)),

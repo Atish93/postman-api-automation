@@ -1,6 +1,10 @@
 # postman-api-automation
 
-API test automation for the Restful-Booker demo API, built by hand and by a team of AI agents.
+API test automation for the Restful-Booker demo API, built by hand and by a team of AI agents, with a dashboard on the way (`docs/ROADMAP.md`).
+
+- `agent/`: the agent team (below).
+- `server/`: the dashboard's API server: collections, environments, runs. See `server/README.md`.
+- `collection/`: the first hand-built collection.
 
 ## collection/
 - `build.js` generates `collection.json`, a 10-request Postman collection (login, create, read, update, delete, plus negative cases).

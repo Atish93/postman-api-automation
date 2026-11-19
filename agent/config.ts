@@ -2,7 +2,8 @@
 // Set QA_CONFIG to use a different file.
 import { readFileSync } from "node:fs";
 
-type Environment = { label: string; baseUrl: string; healthPath: string };
+// variables: extra values for the collection, e.g. credentials; they win over collection variables.
+type Environment = { label: string; baseUrl: string; healthPath: string; variables?: Record<string, string> };
 export type Config = {
   environments: Record<string, Environment>;
   defaultEnvironment: string;

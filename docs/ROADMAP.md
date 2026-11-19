@@ -26,8 +26,8 @@ A web dashboard around the agent team in `agent/`: connect Postman collections, 
 | # | Phase | Status |
 |---|---|---|
 | 0 | Engine ready for a UI: events, approvals by another program, result file | **Done** |
-| 1 | Server + database: import collections, environments, plain runs, run history | Next |
-| 2 | Web UI: Dashboard, Collections, Environments, Runs (live log) | |
+| 1 | Server + database: import collections, environments, plain runs, run history | **Done** (`server/`) |
+| 2 | Web UI: Dashboard, Collections, Environments, Runs (live log) | Next |
 | 3 | AI runs from the UI: regression/build, live log, approval buttons, cost | |
 | 4 | Email reports (summary + HTML report + link) and schedules | |
 | 5 | Data across environments: encrypted secrets, compare, copy values, test-data files | |
@@ -39,7 +39,9 @@ A web dashboard around the agent team in `agent/`: connect Postman collections, 
 - `QA_RESULT_FILE=<path>`: everything the run produced, written when it ends.
 - Checked by `npm run check:events` (no model calls).
 
-### 1. Server
+### 1. Server (done)
+See `server/README.md`. The run manager already starts AI runs, streams their events and passes approvals, so phase 3 is mostly UI. Tables for recipients and schedules come with phase 4.
+
 1. `server/` project with a SQLite database.
 2. Tables: collections, environments, variables, runs, run_events, recipients, schedules.
 3. Collections: connect a Postman API key, list workspaces, import; or upload a collection JSON.
