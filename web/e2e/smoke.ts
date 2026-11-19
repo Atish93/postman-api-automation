@@ -26,8 +26,12 @@ const port = 4300 + Math.floor(Math.random() * 500);
 const server = spawn("npx", ["tsx", "src/index.ts"], {
   cwd: fileURLToPath(new URL("../../server/", import.meta.url)),
   env: { ...process.env, PORT: String(port), QA_DB: join(dir, "qa.db"), QA_RUNS_DIR: join(dir, "runs"), POSTMAN_API_BASE: pm.url, POSTMAN_API_KEY: "" },
-  stdio: "ignore",
+  stdio: ["ignore", "pipe", "ignore"],
 });
+// The one-time setup code is printed in the server's log, as a real user would see it.
+let serverLog = "";
+server.stdout!.on("data", (c) => (serverLog += c));
+const setupCode = () => serverLog.match(/\b([0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4})\b/)?.[1];
 const base = `http://127.0.0.1:${port}`;
 for (let i = 0; i < 60; i++) {
   try { if ((await fetch(`${base}/api/health`)).ok) break; } catch {}
@@ -54,6 +58,33 @@ const errors: string[] = [];
 page.on("pageerror", (e: Error) => errors.push(e.message));
 page.on("console", (m: any) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(m.text()));
 const button = (name: string) => page.getByRole("button", { name, exact: true });
+
+await check("first visit: you're asked to set a password with the setup code from the server's log", async () => {
+  await page.goto(`${base}/collections`);
+  await page.waitForURL(/\/setup\?next=%2Fcollections/);
+  await page.getByLabel("Setup code").fill("0000-0000-0000");
+  await page.getByLabel("New password").fill("e2e password 123");
+  await page.getByLabel("Repeat it").fill("e2e password 123");
+  await button("Set password and continue").click();
+  await page.getByText("That setup code isn't right").waitFor();
+  if (!setupCode()) throw new Error("no setup code in the server log");
+  await page.getByLabel("Setup code").fill(setupCode()!);
+  await button("Set password and continue").click();
+  await page.waitForURL(`${base}/collections`);
+});
+
+await check("log out, then a wrong and a right password", async () => {
+  await page.getByRole("button", { name: "Log out" }).first().click();
+  await page.waitForURL(/\/login/);
+  await page.goto(`${base}/settings`);
+  await page.waitForURL(/\/login\?next=%2Fsettings/);
+  await page.getByLabel("Password").fill("wrong password");
+  await button("Log in").click();
+  await page.getByText("Wrong password.").waitFor();
+  await page.getByLabel("Password").fill("e2e password 123");
+  await button("Log in").click();
+  await page.waitForURL(`${base}/settings`);
+});
 
 await check("an empty dashboard shows the getting-started steps", async () => {
   await page.goto(base);
@@ -238,12 +269,12 @@ await check("Run: email the report by hand, and open it", async () => {
 await check("Settings: says secrets are encrypted and where the key file is", async () => {
   await page.goto(`${base}/settings`);
   await page.getByText("are stored encrypted (AES-256-GCM)").waitFor();
-  await page.getByText(/secret\.key/).waitFor();
+  await page.getByText(/secret\.key/).first().waitFor();
 });
 
 await check("Environments: compare side by side, then copy a secret into another environment", async () => {
-  await fetch(`${base}/api/environments`, { method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: "stg", label: "Stg", base_url: api.url, health_path: "/health", variables: [{ key: "region", value: "us" }] }) });
+  const made = await page.request.post(`${base}/api/environments`, { data: { name: "stg", label: "Stg", base_url: api.url, health_path: "/health", variables: [{ key: "region", value: "us" }] } });
+  if (!made.ok()) throw new Error(`creating Stg: ${made.status()}`);
   await page.goto(`${base}/environments`);
   await page.getByRole("link", { name: "Compare and copy" }).click();
   await page.waitForURL(/\/environments\/compare/);
@@ -277,6 +308,28 @@ await check("Test data: upload a CSV; a run goes once per row and shows which ro
   await page.getByText("1 of 3 requests failed").waitFor(); // row 2: the wrong token
 });
 
+await check("Settings: runs at the same time, sessions, and a backup made by hand", async () => {
+  await page.goto(`${base}/settings`);
+  await page.getByText("this one").waitFor();
+  await page.getByLabel("Runs at the same time").selectOption("3");
+  await button("Apply").click();
+  await page.getByText("Up to 3 runs at the same time").waitFor();
+  await button("Back up now").click();
+  await page.getByText(/^Backup made: qa-\d{8}-\d{6}-manual\.db$/).waitFor();
+  await page.getByText("Made by hand").first().waitFor();
+});
+
+await check("Audit log: lists what happened, including the copied secret and the failed login, and filters", async () => {
+  await page.goto(`${base}/audit`);
+  await page.getByText("Copied values from Test to Stg: added apiToken").waitFor();
+  await page.getByText("Wrong password", { exact: true }).waitFor();
+  await page.getByText(/^Started plain run #\d+: Fake API tests on \w+ with tokens\.csv/).first().waitFor();
+  if ((await page.content()).includes("secret-123")) throw new Error("a secret value is in the audit log");
+  await page.getByLabel("Show").selectOption("auth.");
+  await page.getByText("Set the dashboard password").waitFor();
+  if (await page.getByText("Copied values from Test to Stg").count()) throw new Error("the filter didn't apply");
+});
+
 await check("Schedules page lists the schedule", async () => {
   await page.goto(`${base}/schedules`);
   await page.getByText("Weekdays at 07:00").waitFor();
@@ -291,7 +344,7 @@ await check("Theme: switching to dark is applied and remembered", async () => {
 
 await check("Phone width: no page scrolls sideways", async () => {
   await page.setViewportSize({ width: 390, height: 844 });
-  for (const path of ["/", "/collections", "/collections/1", "/environments", "/environments/compare", "/runs", "/runs/1", "/runs/3", "/known-bugs", "/changes", "/schedules", "/settings"]) {
+  for (const path of ["/", "/collections", "/collections/1", "/environments", "/environments/compare", "/runs", "/runs/1", "/runs/3", "/known-bugs", "/changes", "/schedules", "/audit", "/settings"]) {
     await page.goto(base + path);
     await page.waitForLoadState("networkidle");
     const width = await page.evaluate(() => document.documentElement.scrollWidth);

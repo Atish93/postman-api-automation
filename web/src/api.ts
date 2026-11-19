@@ -7,7 +7,13 @@ export type RunStatus =
 export type Settings = {
   postman: { connected: boolean; key_hint: string | null; user?: string | null };
   secrets?: { key_source: "file" | "env" | "memory"; key_file: string | null };
+  runs?: { max_parallel: number; running: number; queued: number } | null;
 };
+export type AuthStatus = { enabled: boolean; setup_needed: boolean; logged_in: boolean };
+export type Session = { id: number; created_at: string; last_seen_at: string; ip: string | null; user_agent: string | null; current: boolean };
+export type AuditEntry = { id: number; at: string; actor: "admin" | "schedule" | "system" | "cli"; ip: string | null; action: string; summary: string; details: Record<string, unknown> | null };
+export type Backup = { name: string; kind: "auto" | "manual"; size: number; created_at: string };
+export type Backups = { dir: string; keep: number; automatic: boolean; key_file: string | null; backups: Backup[] };
 export type Workspace = { id: string; name: string; type: string };
 export type PostmanCollection = { uid: string; name: string; imported: boolean };
 
@@ -114,11 +120,31 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   });
   if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => null);
+  // Logged out (the session expired, or the password changed elsewhere): go to the login page and come back.
+  if (res.status === 401 && data?.login && !/^\/(login|setup)/.test(location.pathname)) {
+    location.assign(`/login?next=${encodeURIComponent(location.pathname + location.search)}`);
+  }
   if (!res.ok) throw new ApiError(data?.error ?? `The server answered ${res.status}.`);
   return data as T;
 }
 
 export const api = {
+  authStatus: () => request<AuthStatus>("GET", "/auth/status"),
+  setup: (code: string, password: string) => request<{ ok: true }>("POST", "/auth/setup", { code, password }),
+  login: (password: string) => request<{ ok: true }>("POST", "/auth/login", { password }),
+  logout: () => request<{ ok: true }>("POST", "/auth/logout"),
+  changePassword: (current: string, password: string) => request<{ ok: true }>("POST", "/auth/password", { current, password }),
+  sessions: () => request<Session[]>("GET", "/auth/sessions"),
+  logoutOthers: () => request<{ ended: number }>("POST", "/auth/logout-others"),
+  audit: (f: { action?: string; q?: string; before_id?: number } = {}) => {
+    const q = new URLSearchParams(Object.entries(f).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]));
+    return request<AuditEntry[]>("GET", `/audit${q.size ? `?${q}` : ""}`);
+  },
+  backups: () => request<Backups>("GET", "/backups"),
+  backupNow: () => request<Backup>("POST", "/backups"),
+  backupUrl: (name: string) => `/api/backups/${encodeURIComponent(name)}/download`,
+  saveRunSettings: (max_parallel: number) => request<{ max_parallel: number }>("PUT", "/settings/runs", { max_parallel }),
+
   settings: () => request<Settings>("GET", "/settings"),
   savePostmanKey: (api_key: string | null) => request<Settings>("PUT", "/settings/postman", { api_key }),
   workspaces: () => request<Workspace[]>("GET", "/postman/workspaces"),

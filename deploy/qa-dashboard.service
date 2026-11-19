@@ -1,0 +1,25 @@
+# Running without Docker on a Linux server, as a systemd service (see docs/DEPLOYMENT.md).
+#   sudo cp deploy/qa-dashboard.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now qa-dashboard
+[Unit]
+Description=QA dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=qa
+WorkingDirectory=/opt/postman-api-automation/server
+# ANTHROPIC_API_KEY=... and other settings, one per line; readable only by root and the qa user
+EnvironmentFile=-/etc/qa-dashboard.env
+Environment=NODE_ENV=production HOST=127.0.0.1 PORT=4000 QA_TRUST_PROXY=1
+ExecStart=/usr/bin/node --import tsx src/index.ts
+Restart=on-failure
+# Hardening: the service can write only its data folder and the agents' folder
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/postman-api-automation/server/data /opt/postman-api-automation/agent
+
+[Install]
+WantedBy=multi-user.target

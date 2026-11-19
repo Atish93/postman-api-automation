@@ -12,7 +12,10 @@
     "dev": "tsx watch src/index.ts",
     "test": "tsx --test --test-timeout=150000 test/*.test.ts",
     "typecheck": "tsc",
-    "seed:demo": "tsx scripts/seed-demo.ts"
+    "seed:demo": "tsx scripts/seed-demo.ts",
+    "restore": "tsx scripts/restore.ts",
+    "reset-password": "tsx scripts/reset-password.ts",
+    "backup": "tsx scripts/backup.ts"
   },
   "dependencies": {
     "@fastify/static": "^10.1.11",
@@ -20,6 +23,7 @@
     "fastify": "^5.12.8",
     "newman": "^6.2.3",
     "nodemailer": "^10.6.0",
+    "tsx": "^4.23.15",
     "zod": "^4.6.7"
   },
   "devDependencies": {
@@ -28,7 +32,6 @@
     "@types/nodemailer": "^8.0.2",
     "@types/smtp-server": "^3.5.13",
     "smtp-server": "^3.21.6",
-    "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }
 }

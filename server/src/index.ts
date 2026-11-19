@@ -28,7 +28,11 @@ Run this in the server folder, then start again:
 }
 
 const { buildApp } = await import("./app.ts");
-const { app, scheduler } = buildApp(undefined, { logger: true });
+const { app, db, scheduler, backups } = buildApp(undefined, { logger: true });
 scheduler.start();
+backups.start();
 const port = Number(process.env.PORT ?? 4000);
 await app.listen({ port, host: process.env.HOST ?? "127.0.0.1" });
+// No password yet: print the setup code now, so it's in the log before anyone opens the page.
+const { hasPassword, currentSetupCode } = await import("./auth.ts");
+if (!hasPassword(db)) currentSetupCode();

@@ -1,0 +1,11 @@
+**/node_modules
+**/.env
+.env*
+.git
+server/data
+web/dist
+agent/runs
+**/*.db
+**/*.db-*
+**/secret.key
+**/*.tsbuildinfo

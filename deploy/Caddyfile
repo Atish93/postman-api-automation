@@ -1,0 +1,9 @@
+# HTTPS in front of the dashboard. Caddy gets and renews the certificate for {$DOMAIN} by itself
+# (the domain's DNS must point at this server, and ports 80 and 443 must be open).
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy qa:4000 {
+		# Live run views use server-sent events: pass them through immediately.
+		flush_interval -1
+	}
+}

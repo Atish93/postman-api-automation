@@ -11,6 +11,8 @@ Needs Node 22.13 or newer (the database uses Node's built-in SQLite).
     export ANTHROPIC_API_KEY=...     # only needed for AI runs
     npm start                        # http://127.0.0.1:4000
 
+**Logging in.** The first visit asks you to set a password with a one-time setup code printed in this server's log. Forgot it? Run `npm run reset-password` here (the server can keep running), then set a new one. Commands: `npm run backup`, `npm run restore -- <file>` (with the server stopped), `npm run reset-password`. To run it on a server with Docker and HTTPS, see `docs/DEPLOYMENT.md`.
+
 **After pulling a new version**, run `npm install` in `agent/`, `server/` and `web/` (a new version may add packages; the server says which are missing), then `npm run build` in `web/`.
 
 The database is `server/data/qa.db` (set `QA_DB` to use another file). Each AI run's result file is kept in `server/data/runs/<id>/` (its settings file, which holds the environment's secrets, is deleted when the run ends). `PORT` and `HOST` change where it listens.
@@ -80,6 +82,18 @@ Every run uses the environment's `base_url` as `{{baseUrl}}`, and its variables 
 - `GET /api/collections/:id/data-files`, `POST /api/collections/:id/data-files` `{ "name": "users.csv", "content": "…", "replace": false }`: list and upload. Each file says which of its columns the collection `used` and which it didn't (`unused`).
 - `GET /api/data-files/:id` (with the first 20 rows), `GET /api/data-files/:id/download`, `DELETE /api/data-files/:id` (refused while a schedule uses it; runs keep its name).
 - Schedules take `"data_file_id"` too (plain runs only).
+
+**Logins** (every other `/api` path needs a session cookie; without one: `401 { "login": true }`, or a redirect to `/login` for pages opened in a browser)
+- `GET /api/auth/status`: `{ enabled, setup_needed, logged_in }`.
+- `POST /api/auth/setup` `{ "code", "password" }`: the first password (the code is in the server log). `POST /api/auth/login` `{ "password" }`, `POST /api/auth/logout`.
+- `POST /api/auth/password` `{ "current", "password" }`: change it; other sessions end. `GET /api/auth/sessions`, `POST /api/auth/logout-others`.
+- Requests that change something are refused (403) when the browser says they came from another website.
+
+**Audit log**: `GET /api/audit?action=run.&q=Stg&before_id=`: newest first, 100 at a time.
+
+**Backups**: `GET /api/backups`, `POST /api/backups` (one now), `GET /api/backups/:name/download`. Daily automatic backups; see `docs/DEPLOYMENT.md`.
+
+**Runs at the same time**: `PUT /api/settings/runs` `{ "max_parallel": 1-8 }` (default 2). Two runs of the same collection on the same environment never run together.
 
 **Run statuses:** `queued`, `running`, `passed`, `passed_with_known_bugs` (the only failures are in `KNOWN BUG` requests), `failed`, `server_issue` ("Facing server issues, please check <Env> Env"), `circuit_breaker`, `error`, `cancelled`.
 

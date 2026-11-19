@@ -1,0 +1,40 @@
+# The QA dashboard with Docker.  docker compose up -d --build   (see docs/DEPLOYMENT.md)
+#
+# Without a domain: open http://127.0.0.1:4000 on this machine (it isn't reachable from other machines).
+# On a server with a domain: set DOMAIN in .env and start with the https profile:
+#   docker compose --profile https up -d --build
+# Caddy then serves https://<DOMAIN> with a certificate it gets and renews by itself.
+services:
+  qa:
+    build: .
+    image: qa-dashboard
+    restart: unless-stopped
+    env_file:
+      - path: .env          # ANTHROPIC_API_KEY for AI runs, and optional settings (see .env.example)
+        required: false
+    environment:
+      QA_TRUST_PROXY: "1"   # only Caddy (or this machine) can reach the port below, so its forwarded headers are trusted
+    ports:
+      - "127.0.0.1:4000:4000"
+    volumes:
+      - qa-data:/app/server/data
+
+  caddy:
+    image: caddy:2
+    profiles: [https]
+    restart: unless-stopped
+    depends_on: [qa]
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}   # set DOMAIN in .env, e.g. qa.example.com
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  qa-data:
+  caddy-data:
+  caddy-config:

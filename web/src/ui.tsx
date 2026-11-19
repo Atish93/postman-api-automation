@@ -36,6 +36,8 @@ const paths: Record<string, ReactNode> = {
   lock: <><rect x="4.5" y="9" width="11" height="8" rx="1.5" /><path d="M7 9V6.5a3 3 0 016 0V9" /></>,
   minus: <path d="M5 10h10" />,
   equal: <path d="M5 8h10M5 12h10" />,
+  shield: <path d="M10 2.5l6 2.5v4.5c0 3.8-2.6 6.6-6 8-3.4-1.4-6-4.2-6-8V5l6-2.5z" />,
+  logout: <><path d="M8 4H5a1 1 0 00-1 1v10a1 1 0 001 1h3" /><path d="M12 6.5l3.5 3.5-3.5 3.5M15.5 10H8" /></>,
 };
 export function Icon({ name, size = 16, className = "" }: { name: keyof typeof paths | string; size?: number; className?: string }) {
   return (

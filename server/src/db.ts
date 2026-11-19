@@ -142,6 +142,30 @@ const migrations: string[] = [
   ALTER TABLE runs ADD COLUMN data_file_name TEXT;    -- kept if the file is deleted later
   ALTER TABLE schedules ADD COLUMN data_file_id INTEGER REFERENCES data_files(id) ON DELETE SET NULL;
   `,
+  // 5: phase 6 - logins and the audit log (the password hash is the setting "admin_password")
+  `
+  CREATE TABLE sessions (
+    id           INTEGER PRIMARY KEY,
+    token_hash   TEXT NOT NULL UNIQUE,            -- SHA-256 of the cookie's token; the token itself isn't stored
+    created_at   TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,
+    ip           TEXT,
+    user_agent   TEXT
+  );
+
+  CREATE TABLE audit_log (
+    id      INTEGER PRIMARY KEY,
+    at      TEXT NOT NULL,
+    actor   TEXT NOT NULL,                       -- 'admin', 'schedule', 'system' or 'cli'
+    ip      TEXT,
+    action  TEXT NOT NULL,                       -- e.g. 'run.approval', 'environment.update'
+    summary TEXT NOT NULL,                       -- in words; never contains secret values
+    details TEXT                                 -- JSON
+  );
+  CREATE INDEX audit_by_time ON audit_log(at);
+  CREATE INDEX audit_by_action ON audit_log(action, at);
+  `,
 ];
 
 export function openDb(path = process.env.QA_DB ?? fileURLToPath(new URL("../data/qa.db", import.meta.url))): DB {

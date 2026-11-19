@@ -16,10 +16,14 @@ import { KnownBugsPage } from "./pages/KnownBugs.tsx";
 import { ChangesPage } from "./pages/Changes.tsx";
 import { SchedulesPage } from "./pages/Schedules.tsx";
 import { NotFoundPage } from "./pages/NotFound.tsx";
+import { LoginPage } from "./pages/Login.tsx";
+import { AuditPage } from "./pages/Audit.tsx";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: true } } });
 
 const router = createBrowserRouter([
+  { path: "/login", element: <LoginPage /> },
+  { path: "/setup", element: <LoginPage setup /> },
   {
     element: <Layout />,
     children: [
@@ -36,6 +40,7 @@ const router = createBrowserRouter([
       { path: "/changes", element: <ChangesPage /> },
       { path: "/schedules", element: <SchedulesPage /> },
       { path: "/settings", element: <SettingsPage /> },
+      { path: "/audit", element: <AuditPage /> },
       { path: "*", element: <NotFoundPage /> },
     ],
   },

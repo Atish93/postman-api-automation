@@ -1,5 +1,5 @@
 // Builds the API server. Kept separate from index.ts so tests can create one without listening on a port.
-import Fastify from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
 import { existsSync } from "node:fs";
 import { ZodError } from "zod";
@@ -19,15 +19,25 @@ import { scheduleRoutes } from "./routes/schedules.ts";
 import { Scheduler } from "./scheduler.ts";
 import { notifyRunFinished } from "./email.ts";
 import { fileURLToPath } from "node:url";
+import { authRoutes } from "./auth.ts";
+import { auditHooks, auditRoutes } from "./auditRoutes.ts";
+import { pruneAudit } from "./audit.ts";
+import { backupRoutes } from "./routes/backups.ts";
+import { AutoBackup } from "./backups.ts";
 
-export function buildApp(db: DB = openDb(), opts: { logger?: boolean } = {}) {
-  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 20 * 1024 * 1024 });
+// auth: the login (on unless a test turns it off).
+export function buildApp(db: DB = openDb(), opts: { logger?: boolean; auth?: boolean } = {}) {
+  // Behind a reverse proxy (Caddy, nginx) set QA_TRUST_PROXY=1, so the real address and https are known.
+  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 20 * 1024 * 1024, trustProxy: process.env.QA_TRUST_PROXY === "1" });
+  securityHeaders(app);
   // When a run finishes, email its report if its collection's rule says so, and note that on the run.
   const runs: RunManager = new RunManager(db, async (runId) => {
     const sent = await notifyRunFinished(db, runId);
     if (sent) runs.addEvent(runId, sent.status === "sent" ? "email_sent" : "email_failed", sent);
   });
   const scheduler = new Scheduler(db, runs); // started by index.ts
+  const backups = new AutoBackup(db); // started by index.ts
+  pruneAudit(db);
 
   app.setErrorHandler((err: any, _req, reply) => {
     if (err instanceof ZodError)
@@ -39,7 +49,11 @@ export function buildApp(db: DB = openDb(), opts: { logger?: boolean } = {}) {
   });
 
   app.get("/api/health", async () => ({ ok: true }));
-  settingsRoutes(app, db);
+  authRoutes(app, db, opts.auth ?? true);
+  auditHooks(app, db);
+  auditRoutes(app, db);
+  backupRoutes(app, db);
+  settingsRoutes(app, db, runs);
   postmanRoutes(app, db);
   collectionsRoutes(app, db);
   environmentsRoutes(app, db);
@@ -64,8 +78,22 @@ export function buildApp(db: DB = openDb(), opts: { logger?: boolean } = {}) {
         ? reply.code(404).send({ error: "Not found." })
         : reply.type("text/html").sendFile("index.html"));
   }
-  app.addHook("onClose", async () => scheduler.stop());
-  return { app, db, runs, scheduler };
+  app.addHook("onClose", async () => { scheduler.stop(); backups.stop(); });
+  return { app, db, runs, scheduler, backups };
+}
+
+// Headers that tell browsers to be strict: only this site's own scripts, no framing, no sniffing.
+function securityHeaders(app: FastifyInstance) {
+  app.addHook("onSend", async (req, reply, payload) => {
+    reply.header("x-content-type-options", "nosniff");
+    reply.header("referrer-policy", "same-origin");
+    reply.header("x-frame-options", "DENY");
+    reply.header("permissions-policy", "camera=(), microphone=(), geolocation=()");
+    reply.header("content-security-policy",
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
+    if (req.protocol === "https") reply.header("strict-transport-security", "max-age=31536000");
+    return payload;
+  });
 }
 
 // Shown at / when the web app hasn't been built, instead of a bare 404.

@@ -1,16 +1,21 @@
 // Settings: the Postman connection.
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import type { DB } from "../db.ts";
+import { setSetting, type DB } from "../db.ts";
+import type { RunManager } from "../runs/manager.ts";
 import { secretsInfo, setSecretSetting } from "../secrets.ts";
 import { keyHint, postman, postmanKey } from "../postman.ts";
 
-export function settingsRoutes(app: FastifyInstance, db: DB) {
+export function settingsRoutes(app: FastifyInstance, db: DB, runs?: RunManager) {
   app.get("/api/settings", async () => {
     const key = postmanKey(db);
     const s = secretsInfo();
     // Where the encryption key for saved secrets lives (shown so it can be backed up).
-    return { postman: { connected: !!key, key_hint: keyHint(key) }, secrets: { key_source: s.kind, key_file: s.file ?? null } };
+    return {
+      postman: { connected: !!key, key_hint: keyHint(key) },
+      secrets: { key_source: s.kind, key_file: s.file ?? null },
+      runs: runs ? { max_parallel: runs.maxParallel(), running: runs.status().running.length, queued: runs.status().queued.length } : null,
+    };
   });
 
   // Save (or, with null, forget) the Postman API key. It is checked against Postman before it is saved.
@@ -28,5 +33,12 @@ export function settingsRoutes(app: FastifyInstance, db: DB) {
       setSecretSetting(db, "postman_api_key", null);
       throw e;
     }
+  });
+
+  // How many runs may run at the same time (1 to 8).
+  app.put("/api/settings/runs", async (req) => {
+    const { max_parallel } = z.object({ max_parallel: z.number().int().min(1).max(8) }).parse(req.body);
+    setSetting(db, "max_parallel_runs", String(max_parallel));
+    return { max_parallel };
   });
 }

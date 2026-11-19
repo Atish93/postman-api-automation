@@ -14,8 +14,9 @@ async function listen(server: Server) {
 // The fake API. Its health check is /health.
 // mode: "ok" | "down" (health 503) | "outage" (every request 500, health fine) | "one500" (only /items answers 500)
 export async function fakeApi() {
-  const state = { mode: "ok" as "ok" | "down" | "outage" | "one500" };
-  const server = createServer((req, res) => {
+  const state = { mode: "ok" as "ok" | "down" | "outage" | "one500", delayMs: 0 }; // delayMs: answer requests this much later
+  const server = createServer(async (req, res) => {
+    if (state.delayMs && !req.url!.startsWith("/health")) await new Promise((r) => setTimeout(r, state.delayMs));
     const url = new URL(req.url!, "http://x");
     if (url.pathname === "/health") return res.writeHead(state.mode === "down" ? 503 : 200).end("OK");
     if (state.mode === "outage" || (state.mode === "one500" && url.pathname === "/items")) return res.writeHead(500).end("Internal Server Error");
@@ -72,7 +73,7 @@ export async function testApp(postmanUrl: string) {
   delete process.env.POSTMAN_API_KEY;
   const { buildApp } = await import("../src/app.ts");
   const { openDb } = await import("../src/db.ts");
-  return buildApp(openDb(":memory:"));
+  return buildApp(openDb(":memory:"), { auth: false }); // logins have their own tests (auth.test.ts)
 }
 
 export async function waitForRun(app: any, id: number, timeoutMs = 120_000) {

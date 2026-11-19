@@ -1,6 +1,6 @@
 # postman-api-automation
 
-API test automation for the Restful-Booker demo API, built by hand and by a team of AI agents, with a dashboard on the way (`docs/ROADMAP.md`).
+API test automation for the Restful-Booker demo API, built by hand and by a team of AI agents, with a dashboard to run and manage it all (`docs/ROADMAP.md`).
 
 - `agent/`: the agent team (below).
 - `server/`: the dashboard's API server: collections, environments, runs. See `server/README.md`.
@@ -9,6 +9,8 @@ API test automation for the Restful-Booker demo API, built by hand and by a team
       cd agent && npm install
       cd ../web && npm install && npm run build
       cd ../server && npm install && npm start      # http://127.0.0.1:4000
+
+  The first visit asks you to set a password, using a setup code printed in the server's log. To run it on a server with Docker and HTTPS, see `docs/DEPLOYMENT.md`.
 - `collection/`: the first hand-built collection.
 
 ## collection/

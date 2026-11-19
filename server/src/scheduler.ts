@@ -4,6 +4,7 @@ import { CronExpressionParser } from "cron-parser";
 import { now, type DB } from "./db.ts";
 import { HttpError } from "./errors.ts";
 import type { RunManager } from "./runs/manager.ts";
+import { audit } from "./audit.ts";
 
 // The next n times a cron expression fires after `from`. Throws a 400 with the reason if it's invalid.
 export function nextRuns(cron: string, from = new Date(), n = 3): Date[] {
@@ -51,6 +52,7 @@ export class Scheduler {
         .run(s.collection_id, s.environment_id, s.collection_name, s.environment_label, s.kind, s.kind === "ai" ? "regression" : null, s.id,
           s.kind === "plain" ? s.data_file_id ?? null : null, s.kind === "plain" ? s.data_file_name ?? null : null, now()).lastInsertRowid);
       this.runs.addEvent(id, "status", { status: "queued", scheduled: true });
+      audit(this.db, { actor: "schedule", action: "run.scheduled", summary: `Started scheduled ${s.kind} run #${id}: ${s.collection_name} on ${s.environment_label}`, details: { run_id: id, schedule_id: s.id } });
       this.runs.enqueue(id);
       started.push(id);
     }

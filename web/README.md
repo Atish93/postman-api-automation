@@ -29,7 +29,10 @@ Run the server and Vite's dev server side by side; Vite reloads on every save an
 - **Known bugs**: every known bug across collections and environments, open or possibly fixed, with when it was first and last seen and the evidence.
 - **AI changes**: every change the self-healer made, with its diff and reason, whether you approved it, and whether it was kept or undone.
 - **Schedules**: every schedule, with its next run and last result; pause, edit, delete. A collection's page has its own schedules too.
-- **Settings**: the Postman API key, the mail server for reports (with a test email), and where the encryption key for saved secrets is (to back it up).
+- **Audit log**: who changed what and when, filterable: logins, settings, environments (which keys, never the values), runs, every AI approval, backups.
+- **Settings**: the Postman API key, the mail server for reports (with a test email), the password and where you're logged in, how many runs may run at once, backups (make one now, download), and where the encryption key for saved secrets is.
+
+The first visit asks you to set a password (with the setup code from the server's log); after that, every page needs a login. Log out at the bottom of the navigation.
 
 A collection's page has a **Test data** card: upload a CSV or JSON file, preview it, and see which columns the collection doesn't use. Choose the file when running or scheduling and the collection runs once per row; the run's page groups requests by row and every failure says which row it came from.
 

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api.ts";
 import { EmailSettingsCard } from "../EmailSettingsCard.tsx";
+import { BackupsCard, PasswordCard, RunsCard } from "../AdminCards.tsx";
 import { Button, Card, ErrorNote, Field, Icon, PageHeader, Spinner, inputClass, useToast } from "../ui.tsx";
 
 export function SettingsPage() {
@@ -46,6 +47,9 @@ export function SettingsPage() {
           </div>
         </Card>
         <EmailSettingsCard />
+        <PasswordCard />
+        <RunsCard />
+        <BackupsCard />
         <Card title="Saved secrets">
           <div className="space-y-2 p-4 text-sm text-ink-2">
             <p className="flex items-start gap-2"><Icon name="lock" className="mt-0.5 shrink-0 text-good" /><span>Secret environment variables, the Postman API key and the email password are stored encrypted (AES-256-GCM). They're decrypted only when a run or an email needs them.</span></p>

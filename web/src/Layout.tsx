@@ -1,6 +1,8 @@
 // The app shell: navigation (a sidebar on wide screens, a top bar on phones) and the theme switch.
-import { NavLink, Outlet } from "react-router";
-import { Icon, useTheme, type Theme } from "./ui.tsx";
+import { Navigate, NavLink, Outlet, useLocation } from "react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { api } from "./api.ts";
+import { Icon, Spinner, useTheme, type Theme } from "./ui.tsx";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: "home", end: true },
@@ -10,8 +12,23 @@ const NAV = [
   { to: "/schedules", label: "Schedules", icon: "clock" },
   { to: "/known-bugs", label: "Known bugs", icon: "bug" },
   { to: "/changes", label: "AI changes", icon: "sparkle" },
+  { to: "/audit", label: "Audit log", icon: "shield" },
   { to: "/settings", label: "Settings", icon: "gear" },
 ];
+
+function LogoutButton({ compact }: { compact?: boolean }) {
+  const qc = useQueryClient();
+  const out = async () => {
+    await api.logout().catch(() => {});
+    qc.clear();
+    location.assign("/login");
+  };
+  return (
+    <button onClick={out} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-ink-2 hover:bg-raised hover:text-ink" title="Log out">
+      <Icon name="logout" size={14} />{compact ? <span className="sr-only">Log out</span> : "Log out"}
+    </button>
+  );
+}
 
 function ThemeSwitch() {
   const [theme, setTheme] = useTheme();
@@ -47,6 +64,14 @@ const Logo = () => (
 );
 
 export function Layout() {
+  // Every page needs a login (when the server has logins on).
+  const auth = useQuery({ queryKey: ["auth"], queryFn: api.authStatus, staleTime: 60_000 });
+  const here = useLocation();
+  const next = encodeURIComponent(here.pathname + here.search);
+  if (auth.isPending) return <div className="grid min-h-screen place-items-center text-muted"><Spinner size={24} /></div>;
+  if (auth.data?.setup_needed) return <Navigate to={`/setup?next=${next}`} replace />;
+  if (auth.data && !auth.data.logged_in) return <Navigate to={`/login?next=${next}`} replace />;
+  const loginsOn = auth.data?.enabled ?? false;
   const link = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-2.5 whitespace-nowrap rounded-lg px-3 py-2 text-sm ${isActive ? "bg-raised font-medium text-ink ring-1 ring-line" : "text-ink-2 hover:bg-raised hover:text-ink"}`;
   return (
@@ -60,13 +85,13 @@ export function Layout() {
             <NavLink key={n.to} to={n.to} end={n.end} className={link}><Icon name={n.icon} />{n.label}</NavLink>
           ))}
         </nav>
-        <div className="mt-auto px-2"><ThemeSwitch /></div>
+        <div className="mt-auto flex items-center justify-between gap-2 px-2"><ThemeSwitch />{loginsOn && <LogoutButton />}</div>
       </aside>
       </div>
 
       {/* Top bar on phones */}
       <header className="sticky top-0 z-10 border-b border-line bg-card md:hidden">
-        <div className="flex items-center justify-between px-4 py-3"><Logo /><ThemeSwitch /></div>
+        <div className="flex items-center justify-between px-4 py-3"><Logo /><div className="flex items-center gap-1"><ThemeSwitch />{loginsOn && <LogoutButton compact />}</div></div>
         <nav className="flex gap-1 overflow-x-auto px-3 pb-2">
           {NAV.map((n) => (
             <NavLink key={n.to} to={n.to} end={n.end} className={link}><Icon name={n.icon} />{n.label}</NavLink>

@@ -31,7 +31,7 @@ A web dashboard around the agent team in `agent/`: connect Postman collections, 
 | 3 | AI runs from the UI: regression/build, live log, approval buttons, cost | **Done** |
 | 4 | Email reports (summary + HTML report + link) and schedules | **Done** |
 | 5 | Data across environments: encrypted secrets, compare, copy values, test-data files | **Done** |
-| 6 | Hardening: logins, Postgres, job queue, Docker, deployment, backups, audit log | Next |
+| 6 | Hardening: login, parallel runs, Docker, deployment, backups, audit log | **Done** |
 
 ### 0. Engine (done)
 - `QA_EVENTS=1`: one `@@event {json}` line per event on stdout.
@@ -78,5 +78,13 @@ Secrets encrypted in the database (AES-256-GCM, key in `server/data/secret.key`)
 2. Side-by-side comparison of environments (same / different / missing; secrets compared on the server); copy chosen values between them, with a preview and without overwriting unless asked.
 3. Test-data files (CSV or JSON) for running a collection once per data row; which columns the collection doesn't use; the row of every failure in the run, the report and the email.
 
-### 6. Hardening
-Logins and roles, Postgres, a job queue for parallel runs, Docker, deployment guide, backups, audit log of approvals.
+### 6. Hardening (done)
+Decided: one admin password (no roles), SQLite kept (no Postgres), a shared server with HTTPS, up to N runs at once. See `docs/DEPLOYMENT.md`.
+
+1. Login: one password (scrypt hash), sessions in HttpOnly cookies, a one-time setup code from the server log, a limit on wrong passwords, password reset from the command line, refusal of requests from other websites, strict security headers.
+2. Audit log: logins, settings, environments (which keys, never values), collections, test data, schedules, runs, every AI approval answered, backups. It has its own page, with filters.
+3. Parallel runs: up to N at once (Settings), never the same collection on the same environment together; queued runs survive a restart.
+4. Backups: daily (newest 7 kept), by hand in Settings or `npm run backup`, downloadable; `npm run restore`. The encryption key is kept out of backups.
+5. Docker image (non-root, health check, one data volume, including what the agents learn), docker-compose with Caddy for HTTPS, a systemd unit, and the deployment guide.
+
+Later, if the dashboard grows to a team: user accounts with roles, and Postgres.
