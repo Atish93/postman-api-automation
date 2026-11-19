@@ -35,6 +35,8 @@ const state = {
   approved: false, // a human approved the plan
   diagnoses: [] as Diagnosis[],
   heals: [] as string[], // human-readable record of every change made
+  loadedSnapshot: null as string | null, // the collection as downloaded, to detect real changes
+  probeBookings: [] as number[], // bookings the debugger created, deleted by cleanupProbes()
 };
 
 const text = (t: string, isError = false) => ({ content: [{ type: "text" as const, text: t }], isError });
@@ -174,6 +176,13 @@ export const sendRequest = tool(
     const res = await fetch(url, { method, headers, body });
     const resBody = await res.text();
     console.log(`[probe] ${method} ${url} -> ${res.status}`);
+    // Remember bookings the debugger creates, so cleanupProbes() can delete them even if it forgets.
+    if (method === "POST" && new URL(url).pathname === "/booking" && res.ok) {
+      try {
+        const id = JSON.parse(resBody).bookingid;
+        if (typeof id === "number") state.probeBookings.push(id);
+      } catch {}
+    }
     return text(JSON.stringify({ status: res.status, content_type: res.headers.get("content-type"), body: resBody.slice(0, 1500) }, null, 2));
   },
 );
@@ -209,6 +218,22 @@ export const recordDiagnosis = tool(
     return text(`Recorded.${saved}`);
   },
 );
+
+// Deletes every booking the debugger created with send_request. Call when the run ends.
+// (Specific to Restful-Booker: log in for a token, then DELETE each booking.)
+export async function cleanupProbes() {
+  if (!state.probeBookings.length) return;
+  const base = "https://restful-booker.herokuapp.com";
+  const auth = await fetch(`${base}/auth`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "admin", password: "password123" }),
+  }).then((r) => r.json());
+  for (const id of state.probeBookings.splice(0)) {
+    const res = await fetch(`${base}/booking/${id}`, { method: "DELETE", headers: { Cookie: `token=${auth.token}` } });
+    console.log(`[cleanup] deleted probe booking ${id}: ${res.status}`);
+  }
+}
 
 // ---- Self-healer ----
 export const patchRequest = tool(
@@ -306,7 +331,7 @@ export const markKnownBugs = tool(
       marked.push(r.name);
     }
     if (marked.length) state.dirty = true;
-    return text(marked.length ? `Marked:\n${marked.join("\n")}\nRun the collection again before publishing.` : "Nothing to mark.");
+    return text(marked.length ? `Marked:\n${marked.join("\n")}\nRun the collection again before publishing.` : "Nothing to mark: every API bug was already marked. No need to run again.");
   },
 );
 
@@ -316,7 +341,7 @@ export const loadPublishedCollection = tool(
   { collection_uid: z.string() },
   async ({ collection_uid }) => {
     const data = await postman(`/collections/${encodeURIComponent(collection_uid)}`);
-    Object.assign(state, { collection: data.collection, source: { uid: collection_uid }, lastRun: null, dirty: false, diagnoses: [], heals: [] });
+    Object.assign(state, { collection: data.collection, source: { uid: collection_uid }, lastRun: null, dirty: false, diagnoses: [], heals: [], loadedSnapshot: JSON.stringify(data.collection) });
     return text(`Loaded "${data.collection.info.name}" with ${requestsOf(data.collection.item).length} requests.`);
   },
 );
@@ -350,7 +375,7 @@ export const updatePublishedCollection = tool(
   {},
   async () => {
     if (!state.source) return text("Refused: the working collection was not loaded from Postman.", true);
-    if (!state.heals.length && !state.collection.item.some((r: any) => r.name?.startsWith(KNOWN_BUG_PREFIX))) return text("Nothing changed, so nothing was saved.");
+    if (JSON.stringify(state.collection) === state.loadedSnapshot) return text("Nothing changed since it was downloaded, so nothing was saved.");
     const blocked = canShip();
     if (blocked) return text(`Refused: ${blocked}.`, true);
     await postman(`/collections/${encodeURIComponent(state.source.uid)}`, { method: "PUT", body: JSON.stringify({ collection: state.collection }) });

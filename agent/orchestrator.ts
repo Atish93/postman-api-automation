@@ -9,7 +9,7 @@
 // Re-check published ones:     npx tsx orchestrator.ts --regression [collection uid ...]
 //   (with no uids, regression checks every "(agent-built)" collection in the workspace)
 import { query, type AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
-import { qaServer, printMessage } from "./tools.ts";
+import { qaServer, printMessage, cleanupProbes } from "./tools.ts";
 
 const WORKSPACE_ID = "a4ac7a19-b10d-4f2d-8621-68f6b79122b5"; // "Practice Collection"
 const args = process.argv.slice(2);
@@ -61,7 +61,7 @@ For each failure:
    - api_bug: the API contradicts its documentation, and a direct request reproduces it.
    - flaky: the failure does not reproduce, or comes from timeouts, 5xx errors or other people's data on a shared server. Use rerun_collection to check whether it repeats.
    Where the documentation is silent, treat the API's consistent behaviour as correct.
-5. Call record_diagnosis once per failed assertion, with the evidence. Use high confidence only when a direct request proved it. Add a lesson when the finding is new and would help future runs.
+5. Call record_diagnosis once per failed assertion, with the evidence. Use high confidence only when a direct request proved it. Delete any data you create while probing; the program also deletes probe bookings when the run ends. Add a lesson when the finding is new and would help future runs.
 
 Failures in requests whose names start with "KNOWN BUG - " are expected: check with one probe whether the bug is still there and record it as api_bug again, or say plainly that it now seems fixed.
 Reply with one line per failure: request, assertion, category, confidence, and the key evidence.`,
@@ -93,7 +93,7 @@ Always call subagents with run_in_background set to false, and pass them everyth
    b. If any were diagnosed as test_defect, ask the healer to fix them (give it those diagnoses).
    c. Check run_status. If new failures appeared or fixes did not hold, go back to (a). At most 3 rounds.
    Failures diagnosed as flaky: ask the debugger to re-run once more; if they still fail, they stay unexplained.
-6. If any failures were diagnosed as api_bug, call mark_known_bugs, then rerun_collection.
+6. If any failures were diagnosed as api_bug, call mark_known_bugs. Run rerun_collection afterwards only if it marked something.
 7. Publish with postman_publish_collection. It refuses unless every remaining failure is a marked known bug; if it refuses, do not publish.
 8. Finish with a short report: what was published (or why not), the final run numbers, each API bug with its evidence, each change the healer made, and anything saved to the knowledge base.`;
 
@@ -107,7 +107,7 @@ For each collection, one at a time:
    a. Ask the debugger to diagnose every failure (give it the list of failed assertions).
    b. If any were diagnosed as test_defect, ask the healer to fix them (give it those diagnoses).
    c. Check run_status. If new failures appeared or fixes did not hold, go back to (a). At most 3 rounds.
-4. If any failures were diagnosed as api_bug, call mark_known_bugs, then rerun_collection.
+4. If any failures were diagnosed as api_bug, call mark_known_bugs. Run rerun_collection afterwards only if it marked something.
 5. Save it with postman_update_collection. It refuses unless every remaining failure is a marked known bug; if it refuses, leave the published collection unchanged.
 
 Finish with a short report per collection: pass or fail before and after, each API bug with its evidence, each change the healer made, any known bug that now seems fixed, and anything saved to the knowledge base.`;
@@ -133,6 +133,7 @@ const prompt = regression
     : `Re-check every collection whose name ends in "(agent-built)" in Postman workspace ${WORKSPACE_ID}. List them with postman_list_collections first.`
   : `Request: ${args[0] ?? "Test the checkin and checkout date filters on GET /booking."}\nPostman workspace id: ${args[1] ?? WORKSPACE_ID}`;
 
+try {
 for await (const msg of query({
   prompt,
   options: {
@@ -149,4 +150,7 @@ for await (const msg of query({
   },
 })) {
   printMessage(msg, "orchestrator");
+}
+} finally {
+  await cleanupProbes(); // delete probe bookings even if the run failed part-way
 }
