@@ -14,7 +14,9 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { buildAgents, allowedTools, type Mode } from "./agents.ts";
 import { env, selectEnvironment } from "./config.ts";
-import { qaServer, printMessage, cleanupProbes, closeHuman, checkServerHealth, serverIssue, abortController, breakerState } from "./tools.ts";
+import { qaServer, printMessage, cleanupProbes, closeHuman, checkServerHealth, serverIssue, abortController, breakerState, runResults } from "./tools.ts";
+import { emit } from "./events.ts";
+import { writeFileSync } from "node:fs";
 
 const WORKSPACE_ID = "a4ac7a19-b10d-4f2d-8621-68f6b79122b5"; // "Practice Collection"
 
@@ -38,12 +40,24 @@ const prompt =
     : `Request: ${args[0] ?? "Test the checkin and checkout date filters on GET /booking."}\nPostman workspace id: ${args[1] ?? WORKSPACE_ID}`;
 
 console.log(`Environment: ${env().label} (${env().baseUrl})`);
+const startedAt = new Date().toISOString();
+emit("run_started", { mode, environment: env().name, prompt });
+
+// Writes the result file (QA_RESULT_FILE) and the final event, then exits.
+function finish(exitCode: number, healthIssue: string | null = null): never {
+  const results = { mode, started_at: startedAt, finished_at: new Date().toISOString(), exit_code: exitCode, ...runResults() };
+  if (healthIssue) results.server_issue = healthIssue;
+  if (process.env.QA_RESULT_FILE) writeFileSync(process.env.QA_RESULT_FILE, JSON.stringify(results, null, 2));
+  emit("run_finished", { exit_code: exitCode, cost_usd: results.cost_usd });
+  process.exit(exitCode);
+}
 
 // ---- Stop before spending anything if the server is down ----
 const unhealthy = await checkServerHealth();
 if (unhealthy) {
   console.log(`\n${unhealthy}`);
-  process.exit(2);
+  emit("server_issue", { message: unhealthy.split("\n")[0], details: unhealthy.split("\n").slice(1).join(" ") });
+  finish(2, unhealthy);
 }
 
 // ---- Run the team ----
@@ -92,4 +106,4 @@ if (serverIssue()) {
   exitCode = 3;
 }
 // Newman and HTTP keep-alive sockets can also hold the event loop open; the run is over, so exit.
-process.exit(exitCode);
+finish(exitCode);

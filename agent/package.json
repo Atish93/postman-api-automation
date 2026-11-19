@@ -9,7 +9,8 @@
     "build-tests": "tsx orchestrator.ts",
     "regression": "tsx orchestrator.ts --regression",
     "drill": "tsx tests/outage-drill.ts",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "check:events": "tsx tests/check-events.ts"
   },
   "keywords": [],
   "author": "",

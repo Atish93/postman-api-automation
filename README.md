@@ -58,8 +58,16 @@ These live in `tools.ts`, so they hold whatever model an agent runs on:
 - **Cleanup.** Bookings the debugger creates while probing are deleted when the run ends.
 - **Learning.** High-confidence findings are appended to `knowledge/known-issues.md` and added to the search index.
 
+### Using it from another program
+This is how the dashboard (see `docs/ROADMAP.md`) drives the agents:
+- `QA_EVENTS=1`: every event (agent messages, tool calls, collection runs, diagnoses, changes, approvals, server issues, the circuit breaker, publishing) is printed as one `@@event {json}` line on stdout, alongside the normal log.
+- Approval requests are events that include the diff; answer by writing one line to the run's stdin (`y`, or anything else to refuse).
+- `QA_RESULT_FILE=<path>`: when the run ends, everything it produced is written there: exit code, cost, environment, per-collection numbers, failures, diagnoses, changes, known bugs, what was published, and the orchestrator's report.
+- `QA_CONFIG=<path>`: use a different settings file (the server writes one per run).
+
 ### Checking it
-- `npm run check`: checks every rule above directly, with no agents and no cost. Uses a fake server on your machine for the 5xx and circuit-breaker cases.
+- `npm run check`: checks every rule above directly, with no agents and no cost.
+- `npm run check:events`: checks the interface above (events, approvals from another program, result file), with no agents and no cost. Uses a fake server on your machine for the 5xx and circuit-breaker cases.
 - `npm run eval [-- --model <model id>]`: **the model exam.** Runs the debugger and healer on collections with known faults (`eval/fixtures/`) and scores them; earlier findings are hidden so the answers can't be looked up. Run it before switching an agent to a different model. Roughly $0.30–0.60 per run.
 - `npm run drill -- crash|500|404 <collection uid>`: drills with the real agents against a fake server. `crash` forwards to the real API but makes the checkin filter answer 500: it should be debugged as an API bug, not terminate. `500` (everything fails) should end with "Facing server issues". `404` should trip the circuit breaker. Drills are dry runs (`QA_DRY_RUN=1`): nothing is written to Postman or the knowledge base.
 - `npm run typecheck`

@@ -17,6 +17,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync, mkdirSync } fr
 import { createInterface } from "node:readline";
 import { search, addChunk } from "./rag/search.ts";
 import { config, env, serverIssueMessage } from "./config.ts";
+import { emit } from "./events.ts";
 
 const KNOWN_BUG_PREFIX = "KNOWN BUG - ";
 
@@ -52,6 +53,8 @@ const state = {
   attempts: new Map<string, number>(), // patch attempts per request
   serverIssue: null as string | null,
   probeBookings: [] as number[], // bookings the debugger created, deleted by cleanupProbes()
+  outcome: {} as { published?: { uid: string; name: string }; updated?: string },
+  finished: [] as any[], // summaries of collections already worked on in this run (regression)
 };
 
 const text = (t: string, isError = false) => ({ content: [{ type: "text" as const, text: t }], isError });
@@ -72,7 +75,10 @@ async function postman(path: string, init: RequestInit = {}) {
 // (no terminal input, as in CI, or QA_NO_PROMPTS=1 as in the model exam).
 let stdinReader: ReturnType<typeof createInterface> | null = null;
 let stdinLines: AsyncIterator<string> | null = null;
-async function askHuman(question: string): Promise<string | null> {
+let approvalSeq = 0;
+async function askHuman(question: string, details: Record<string, unknown> = {}): Promise<string | null> {
+  const id = ++approvalSeq;
+  emit("approval_request", { id, question, ...details });
   if (process.env.QA_NO_PROMPTS === "1") {
     console.log(`${question}(no answer: prompts are off)`);
     return null;
@@ -81,9 +87,12 @@ async function askHuman(question: string): Promise<string | null> {
     stdinReader = createInterface({ input: process.stdin });
     stdinLines = stdinReader[Symbol.asyncIterator]();
   }
-  process.stdout.write(question);
+  // With events on, end the line so the next event starts on a line of its own.
+  process.stdout.write(process.env.QA_EVENTS === "1" ? `${question}\n` : question);
   const next = await stdinLines!.next();
-  return next.done ? null : next.value.trim();
+  const answer = next.done ? null : next.value.trim();
+  emit("approval_answer", { id, answer });
+  return answer;
 }
 
 // An open stdin reader keeps Node alive after the work is done, so close it when the run ends.
@@ -125,6 +134,7 @@ const ASSERTION = /expect|status|eql|equal|include|property|to\.be|to\.have|pm\.
 function stopForServerIssue(details: string): string {
   if (!state.serverIssue) {
     state.serverIssue = `${serverIssueMessage()}\n${details}`;
+    emit("server_issue", { message: serverIssueMessage(), details });
     console.log(`\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n${state.serverIssue}\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!`);
     abortController.abort();
   }
@@ -180,6 +190,7 @@ function triage() {
   };
 }
 const breakerTripped = () => triage().circuit_breaker.tripped;
+let breakerAnnounced = false;
 // Whether the latest run tripped the breaker (for the program's exit code).
 export const breakerState = () => (state.lastRun ? breakerTripped() : false);
 const BREAKER_REFUSAL = "Refused: the circuit breaker has tripped (too many requests failing at once). Nothing may be changed, marked or saved in this run.";
@@ -246,10 +257,12 @@ async function runWorkingCollection(confirming = false): Promise<any> {
     if (mostFailing && confirming) return { terminated: stopForServerIssue(`${summaryLine}, in two runs in a row.`) };
     if (mostFailing) {
       console.log(`[server] ${summaryLine}. Health check passes; running again in ${recheckAfterSeconds}s to rule out a blip.`);
+      emit("server_errors", { summary: summaryLine, action: "recheck" });
       await sleep(recheckAfterSeconds * 1000);
       return runWorkingCollection(true);
     }
     console.log(`[server] ${summaryLine}. Not an outage (health check passes): treating them as failures to debug.`);
+    emit("server_errors", { summary: summaryLine, action: "debug" });
   }
 
   const failures: Failure[] = [...state.details].flatMap(([request, d]) => {
@@ -268,6 +281,7 @@ async function runWorkingCollection(confirming = false): Promise<any> {
   };
   state.dirty = false;
   console.log(`[newman] ${state.lastRun.requests} requests, ${failures.length}/${state.lastRun.assertions} assertions failed`);
+  emit("collection_run", { collection: state.collection?.info?.name, requests: state.lastRun.requests, assertions: state.lastRun.assertions, failed_assertions: failures.length, failed_requests: [...failing] });
 
   // Proof or revert: pending changes are kept only if their request now passes and nothing else broke.
   const reverted: string[] = [];
@@ -282,7 +296,11 @@ async function runWorkingCollection(confirming = false): Promise<any> {
       state.changedRequests.delete(p.item);
       reverted.push(`${p.record.split("\n")[0]} -> REVERTED: ${reason}`);
     }
-    state.heals.push(...state.pending.map((p) => (reverted.some((r) => r.startsWith(p.record.split("\n")[0])) ? `${p.record}\n    (reverted)` : p.record)));
+    for (const p of state.pending) {
+      const wasReverted = reverted.some((r) => r.startsWith(p.record.split("\n")[0]));
+      state.heals.push(wasReverted ? `${p.record}\n    (reverted)` : p.record);
+      emit(wasReverted ? "change_reverted" : "change_kept", { request: p.item.name, change: p.record });
+    }
     state.pending = [];
     if (reverted.length) {
       console.log(`[reverted] ${reverted.join("\n[reverted] ")}`);
@@ -437,6 +455,7 @@ export const recordDiagnosis = tool(
     state.diagnoses = state.diagnoses.filter((x) => !(x.request === d.request && x.assertion === d.assertion));
     state.diagnoses.push(d);
     console.log(`[diagnosis] ${d.category} (${d.confidence}): ${d.request} / ${d.assertion}`);
+    emit("diagnosis", d);
     let saved = "";
     // QA_NO_LEARNING=1 (used by the model exam) keeps findings out of the knowledge base.
     if (lesson && d.confidence === "high" && d.category !== "flaky" && process.env.QA_NO_LEARNING !== "1") {
@@ -448,6 +467,7 @@ export const recordDiagnosis = tool(
       addChunk({ id: `known-issues.md:${title}`, source: "known-issues.md", title, text: body });
       saved = " Saved to the knowledge base.";
       console.log(`[learned] ${title}`);
+      emit("learned", { title });
     }
     if (lesson && !saved)
       saved = process.env.QA_NO_LEARNING === "1" ? " The lesson was NOT saved: learning is switched off for this run."
@@ -522,7 +542,7 @@ export const patchRequest = tool(
     const kind = part === "url" || part === "method" ? `${part} change` : part === "test_script" && changes.some((l) => ASSERTION.test(l)) ? "assertion change" : null;
     if (kind) {
       console.log(`\n========== ${kind.toUpperCase()} NEEDS APPROVAL ==========\nRequest: ${request_name}\nReason: ${reason}\n${changes.join("\n")}\n=====================================================`);
-      const answer = await askHuman(`Apply this ${kind}? Type y to apply, anything else to refuse: `);
+      const answer = await askHuman(`Apply this ${kind}? Type y to apply, anything else to refuse: `, { kind, request: request_name, reason, diff: changes });
       if (!answer || !/^(y|yes)$/i.test(answer))
         return text(`Refused by the human${answer ? `: ${answer}` : " (no answer)"}. Leave this failure for the report.`, true);
     }
@@ -540,6 +560,7 @@ export const patchRequest = tool(
     state.dirty = true;
     state.changedRequests.add(r);
     console.log(`[changed] ${request_name} (${part}): ${reason}\n${changes.map((l) => `    ${l}`).join("\n")}`);
+    emit("change_pending", { request: request_name, part, reason, diff: changes, approved_by_human: !!kind });
     return text(`Applied, pending proof: the next run must show "${request_name}" passing with nothing else newly failing, or it is undone.\n${changes.join("\n")}`);
   },
 );
@@ -551,7 +572,7 @@ export const requestApproval = tool(
   { plan_summary: z.string().describe("The plan, written for a person to read: one line per test case") },
   async ({ plan_summary }) => {
     console.log(`\n================ PLAN FOR REVIEW ================\n${plan_summary}\n=================================================`);
-    const answer = await askHuman("Approve this plan? Type y to approve, or type what to change: ");
+    const answer = await askHuman("Approve this plan? Type y to approve, or type what to change: ", { kind: "plan", plan: plan_summary });
     if (answer === null) return text("REJECTED: nobody answered, so nothing will be built.");
     state.approved = /^(y|yes)$/i.test(answer);
     return text(state.approved ? "APPROVED" : `REJECTED. Feedback from the human: ${answer}`);
@@ -565,6 +586,11 @@ export const runStatus = tool(
   async () => {
     if (state.serverIssue) return text(stopForServerIssue(""), true);
     const { requests, assertions, failures } = state.lastRun ?? { requests: 0, assertions: 0, failures: [] };
+    const cb = triage().circuit_breaker;
+    if (cb.tripped && !breakerAnnounced) {
+      breakerAnnounced = true;
+      emit("circuit_breaker", { requests_needing_diagnosis: cb.requests_needing_diagnosis, trips_at: cb.trips_at });
+    }
     return text(JSON.stringify({ environment: env().label, last_run: { requests, assertions, failed: failures.length }, ...triage(), diagnoses: state.diagnoses, changes: state.heals, unproven_changes: state.pending.length, changed_since_last_run: state.dirty, can_publish: canShip() ?? "yes" }, null, 2));
   },
 );
@@ -596,7 +622,7 @@ export const markKnownBugs = tool(
     const limit = config.limits.newKnownBugsPerRun;
     if (buggy.length > limit) {
       console.log(`\n========== ${buggy.length} NEW KNOWN BUGS (limit ${limit}) ==========\n${buggy.map((r) => r.name).join("\n")}`);
-      const answer = await askHuman(`Mark all ${buggy.length} as KNOWN BUG? Type y to mark, anything else to refuse: `);
+      const answer = await askHuman(`Mark all ${buggy.length} as KNOWN BUG? Type y to mark, anything else to refuse: `, { kind: "known_bugs_over_limit", requests: buggy.map((r) => r.name) });
       if (!answer || !/^(y|yes)$/i.test(answer))
         return text(`Refused: ${buggy.length} new known bugs is over the limit of ${limit} per run, and a human did not approve. Nothing was marked.`, true);
     }
@@ -610,6 +636,7 @@ export const markKnownBugs = tool(
       marked.push(r.name);
     }
     state.dirty = true;
+    emit("known_bugs_marked", { requests: marked });
     return text(`Marked:\n${marked.join("\n")}\nRun the collection again before publishing.`);
   },
 );
@@ -620,7 +647,10 @@ export const loadPublishedCollection = tool(
   { collection_uid: z.string() },
   async ({ collection_uid }) => {
     const data = await postman(`/collections/${encodeURIComponent(collection_uid)}`);
+    if (state.collection && state.lastRun) state.finished.push(collectionSummary());
+    emit("collection_loaded", { uid: collection_uid, name: data.collection.info.name });
     Object.assign(state, {
+      outcome: {},
       collection: data.collection, source: { uid: collection_uid }, loadedSnapshot: JSON.stringify(data.collection),
       lastRun: null, dirty: false, diagnoses: [], heals: [], pending: [], changedRequests: new Set(), attempts: new Map(),
     });
@@ -648,6 +678,8 @@ export const publishCollection = tool(
     const blocked = canShip();
     if (blocked) return text(`Refused: ${blocked}.`, true);
     const data = await postman(`/collections?workspace=${encodeURIComponent(workspace_id)}`, { method: "POST", body: JSON.stringify({ collection: state.collection }) });
+    state.outcome.published = { uid: data.collection.uid, name: data.collection.name };
+    emit("published", state.outcome.published);
     return text(JSON.stringify(data.collection));
   },
 );
@@ -663,6 +695,8 @@ export const updatePublishedCollection = tool(
     const blocked = canShip();
     if (blocked) return text(`Refused: ${blocked}.`, true);
     await postman(`/collections/${encodeURIComponent(state.source.uid)}`, { method: "PUT", body: JSON.stringify({ collection: state.collection }) });
+    state.outcome.updated = state.source.uid;
+    emit("updated", { uid: state.source.uid });
     return text(`Updated ${state.source.uid}.`);
   },
 );
@@ -693,21 +727,59 @@ export const qaServer = (team = false) =>
 // Messages from a subagent carry parent_tool_use_id: the id of the Agent call that started it.
 const agentNames = new Map<string, string>();
 let totalCost = 0;
+let lastReport = "";
 export const costSoFar = () => totalCost;
+
+// What one collection ended up as: for the result file and the dashboard.
+function collectionSummary() {
+  const t = triage();
+  return {
+    name: state.collection?.info?.name,
+    uid: state.source?.uid ?? state.outcome.published?.uid ?? null,
+    requests: state.lastRun?.requests ?? 0,
+    assertions: state.lastRun?.assertions ?? 0,
+    failed_assertions: state.lastRun?.failures.length ?? 0,
+    failures: state.lastRun?.failures ?? [],
+    known_bugs: requestsOf(state.collection?.item).filter((r) => r.name.startsWith(KNOWN_BUG_PREFIX)).map((r) => r.name),
+    known_bugs_now_passing: t.known_bugs_now_passing,
+    circuit_breaker_tripped: state.lastRun ? t.circuit_breaker.tripped : false,
+    diagnoses: state.diagnoses,
+    changes: state.heals,
+    published: state.outcome.published ?? null,
+    updated: state.outcome.updated ?? null,
+  };
+}
+
+// Everything a run produced. orchestrator.ts writes it to QA_RESULT_FILE when the run ends.
+export function runResults() {
+  return {
+    environment: { name: env().name, label: env().label, base_url: env().baseUrl },
+    collections: [...state.finished, ...(state.collection && state.lastRun ? [collectionSummary()] : [])],
+    server_issue: state.serverIssue,
+    cost_usd: Number(totalCost.toFixed(4)),
+    report: lastReport,
+  };
+}
 export function printMessage(msg: SDKMessage, mainName = "agent") {
   const who = (id: string | null | undefined) => (id ? agentNames.get(id) ?? "subagent" : mainName);
   if (msg.type === "assistant") {
     for (const block of msg.message.content) {
-      if (block.type === "text" && block.text.trim()) console.log(`\n[${who(msg.parent_tool_use_id)}] ${block.text.trim()}`);
+      if (block.type === "text" && block.text.trim()) {
+        console.log(`\n[${who(msg.parent_tool_use_id)}] ${block.text.trim()}`);
+        emit("agent_message", { agent: who(msg.parent_tool_use_id), text: block.text.trim() });
+        if (!msg.parent_tool_use_id) lastReport = block.text.trim(); // the main agent's last words are its report
+      }
       if (block.type === "tool_use") {
         const input: any = block.input;
         if (block.name === "Agent") agentNames.set(block.id, input.subagent_type ?? "subagent");
         const target = block.name === "Agent" ? input.subagent_type : block.name.replace("mcp__qa__", "");
         console.log(`\n[${who(msg.parent_tool_use_id)} -> ${target}] ${JSON.stringify(input).slice(0, 160)}…`);
+        emit(block.name === "Agent" ? "agent_started" : "tool_call", { agent: who(msg.parent_tool_use_id), target, input: JSON.stringify(input).slice(0, 500) });
       }
     }
   } else if (msg.type === "result") {
     totalCost += msg.total_cost_usd ?? 0;
-    console.log(`\n[done] ${msg.subtype}, ${msg.num_turns} turns, $${msg.total_cost_usd?.toFixed(3)}`);
+    console.log(`\n[done] ${msg.subtype}, ${msg.num_turns} turns, ${msg.total_cost_usd?.toFixed(3)}`);
+    emit("agent_run_finished", { agent: mainName, subtype: msg.subtype, turns: msg.num_turns, cost_usd: msg.total_cost_usd });
   }
 }
