@@ -11,6 +11,8 @@ Needs Node 22.13 or newer (the database uses Node's built-in SQLite).
     export ANTHROPIC_API_KEY=...     # only needed for AI runs
     npm start                        # http://127.0.0.1:4000
 
+**After pulling a new version**, run `npm install` in `agent/`, `server/` and `web/` (a new version may add packages; the server says which are missing), then `npm run build` in `web/`.
+
 The database is `server/data/qa.db` (set `QA_DB` to use another file). Each AI run's result file is kept in `server/data/runs/<id>/` (its settings file, which holds the environment's secrets, is deleted when the run ends). `PORT` and `HOST` change where it listens.
 
 **Secrets** (secret variables, the Postman API key, the email password) are encrypted in the database with AES-256-GCM. The key is created on first start in `server/data/secret.key` (readable only by you), or comes from `QA_SECRET_KEY` (32 random bytes, base64: `openssl rand -base64 32`). **Back up the key together with the database**: without it the saved secrets can't be read, and you'd need to enter them again. Secrets saved by an earlier version are encrypted on the next start. This protects copies of the database; it doesn't protect against someone who can read every file on your computer.

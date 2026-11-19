@@ -10,6 +10,23 @@ if (major < 22 || (major === 22 && minor < 13)) {
   process.exit(1);
 }
 
+// After pulling a new version, packages it added may not be installed yet: say so instead of crashing.
+{
+  const { existsSync, readFileSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const deps = Object.keys(JSON.parse(readFileSync(`${root}package.json`, "utf8")).dependencies ?? {});
+  const missing = deps.filter((d) => !existsSync(`${root}node_modules/${d}/package.json`));
+  if (missing.length) {
+    console.error(`Some packages this version needs aren't installed: ${missing.join(", ")}.
+Run this in the server folder, then start again:
+
+    npm install
+`);
+    process.exit(1);
+  }
+}
+
 const { buildApp } = await import("./app.ts");
 const { app, scheduler } = buildApp(undefined, { logger: true });
 scheduler.start();
