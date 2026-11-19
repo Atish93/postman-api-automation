@@ -9,7 +9,7 @@
 // Re-check published ones:     npx tsx orchestrator.ts --regression [collection uid ...]
 //   (with no uids, regression checks every "(agent-built)" collection in the workspace)
 import { query, type AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
-import { qaServer, printMessage, closeHuman } from "./tools.ts";
+import { qaServer, printMessage, cleanupProbes, closeHuman } from "./tools.ts";
 
 const WORKSPACE_ID = "a4ac7a19-b10d-4f2d-8621-68f6b79122b5"; // "Practice Collection"
 const args = process.argv.slice(2);
@@ -61,9 +61,9 @@ For each failure:
    - api_bug: the API contradicts its documentation, and a direct request reproduces it.
    - flaky: the failure does not reproduce, or comes from timeouts, 5xx errors or other people's data on a shared server. Use rerun_collection to check whether it repeats.
    Where the documentation is silent, treat the API's consistent behaviour as correct.
-5. Call record_diagnosis once per failed assertion, with the evidence. Use high confidence only when a direct request proved it. Add a lesson when the finding is new and would help future runs.
+5. Call record_diagnosis once per failed assertion, with the evidence. Use high confidence only when a direct request proved it. Delete any data you create while probing; the program also deletes probe bookings when the run ends. Add a lesson when the finding is new and would help future runs.
 
-Failures in requests whose names start with "KNOWN BUG - " are expected: check with one probe whether the bug is still there and record it as api_bug again, or say plainly that it now seems fixed.
+You are only given failures that need investigating. If one is in a request named "KNOWN BUG - ...", it is failing differently from the recorded bug, so investigate it like any other failure.
 Reply with one line per failure: request, assertion, category, confidence, and the key evidence.`,
   },
 
@@ -89,11 +89,11 @@ Always call subagents with run_in_background set to false, and pass them everyth
 3. Check with postman_list_collections that the plan's collection_name is not already used in the workspace. If it is, ask the planner for a new name and get approval again.
 4. Give the builder the approved plan JSON exactly as approved.
 5. If there are failures, run the repair loop:
-   a. Ask the debugger to diagnose every failure (give it the list of failed assertions).
+   a. Ask the debugger to diagnose the failures that run_status lists under needs_diagnosis.
    b. If any were diagnosed as test_defect, ask the healer to fix them (give it those diagnoses).
-   c. Check run_status. If new failures appeared or fixes did not hold, go back to (a). At most 3 rounds.
+   c. Check run_status. If needs_diagnosis still has failures that are new or whose fixes did not hold, go back to (a). At most 3 rounds.
    Failures diagnosed as flaky: ask the debugger to re-run once more; if they still fail, they stay unexplained.
-6. If any failures were diagnosed as api_bug, call mark_known_bugs, then rerun_collection.
+6. If any failures were diagnosed as api_bug, call mark_known_bugs. Run rerun_collection afterwards only if it marked something.
 7. Publish with postman_publish_collection. It refuses unless every remaining failure is a marked known bug; if it refuses, do not publish.
 8. Finish with a short report: what was published (or why not), the final run numbers, each API bug with its evidence, each change the healer made, and anything saved to the knowledge base.`;
 
@@ -101,16 +101,16 @@ const regressionSteps = `You coordinate a small QA team that re-checks published
 Always call subagents with run_in_background set to false, and pass them everything they need in the prompt, since they cannot see this conversation. The working collection is shared through tools.
 
 For each collection, one at a time:
-1. Load it with load_published_collection, then run it with rerun_collection.
-2. If everything passes, note it and move on.
+1. Load it with load_published_collection, run it with rerun_collection, then check run_status.
+2. Failures listed under known_bug_repeats are the recorded known bugs failing the same way again: do not investigate them. If needs_diagnosis is empty, there is nothing to repair: note it and move on.
 3. Otherwise run the repair loop:
-   a. Ask the debugger to diagnose every failure (give it the list of failed assertions).
+   a. Ask the debugger to diagnose the failures listed under needs_diagnosis, and only those.
    b. If any were diagnosed as test_defect, ask the healer to fix them (give it those diagnoses).
-   c. Check run_status. If new failures appeared or fixes did not hold, go back to (a). At most 3 rounds.
-4. If any failures were diagnosed as api_bug, call mark_known_bugs, then rerun_collection.
+   c. Check run_status. If needs_diagnosis still has failures that are new or whose fixes did not hold, go back to (a). At most 3 rounds.
+4. If any failures were diagnosed as api_bug, call mark_known_bugs. Run rerun_collection afterwards only if it marked something.
 5. Save it with postman_update_collection. It refuses unless every remaining failure is a marked known bug; if it refuses, leave the published collection unchanged.
 
-Finish with a short report per collection: pass or fail before and after, each API bug with its evidence, each change the healer made, any known bug that now seems fixed, and anything saved to the knowledge base.`;
+Finish with a short report per collection: pass or fail before and after, known bugs still failing (from known_bug_repeats), new API bugs with their evidence, each change the healer made, any known bug listed under known_bugs_now_passing (say it may be fixed and should be checked by a person), and anything saved to the knowledge base.`;
 
 agents.orchestrator = {
   description: "Coordinates the QA team and decides what gets published.",
@@ -157,6 +157,11 @@ for await (const msg of query({
   console.error(err);
   exitCode = 1;
 } finally {
+  // Delete probe bookings even if the run failed part-way.
+  await cleanupProbes().catch((err) => {
+    console.error("Probe cleanup failed:", err);
+    exitCode = 1;
+  });
   closeHuman();
   // Newman and HTTP keep-alive sockets can also hold the event loop open; the run is over, so exit.
   process.exit(exitCode);
