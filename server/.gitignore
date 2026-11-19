@@ -1,1 +1,3 @@
 data/
+# The encryption key for saved secrets (it lives in data/, ignored above; listed again to be safe)
+secret.key

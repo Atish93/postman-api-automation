@@ -8,6 +8,7 @@ import { ToastProvider } from "./ui.tsx";
 import { DashboardPage } from "./pages/Dashboard.tsx";
 import { CollectionsPage, CollectionPage } from "./pages/Collections.tsx";
 import { EnvironmentsPage, EnvironmentEditPage } from "./pages/Environments.tsx";
+import { ComparePage } from "./pages/Compare.tsx";
 import { RunsPage } from "./pages/Runs.tsx";
 import { RunPage } from "./pages/Run.tsx";
 import { SettingsPage } from "./pages/Settings.tsx";
@@ -27,6 +28,7 @@ const router = createBrowserRouter([
       { path: "/collections/:id", element: <CollectionPage /> },
       { path: "/environments", element: <EnvironmentsPage /> },
       { path: "/environments/new", element: <EnvironmentEditPage /> },
+      { path: "/environments/compare", element: <ComparePage /> },
       { path: "/environments/:id", element: <EnvironmentEditPage /> },
       { path: "/runs", element: <RunsPage /> },
       { path: "/runs/:id", element: <RunPage /> },

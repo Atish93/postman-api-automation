@@ -11,7 +11,9 @@ Needs Node 22.13 or newer (the database uses Node's built-in SQLite).
     export ANTHROPIC_API_KEY=...     # only needed for AI runs
     npm start                        # http://127.0.0.1:4000
 
-The database is `server/data/qa.db` (set `QA_DB` to use another file). Each AI run's settings and result file are kept in `server/data/runs/<id>/`. `PORT` and `HOST` change where it listens.
+The database is `server/data/qa.db` (set `QA_DB` to use another file). Each AI run's result file is kept in `server/data/runs/<id>/` (its settings file, which holds the environment's secrets, is deleted when the run ends). `PORT` and `HOST` change where it listens.
+
+**Secrets** (secret variables, the Postman API key, the email password) are encrypted in the database with AES-256-GCM. The key is created on first start in `server/data/secret.key` (readable only by you), or comes from `QA_SECRET_KEY` (32 random bytes, base64: `openssl rand -base64 32`). **Back up the key together with the database**: without it the saved secrets can't be read, and you'd need to enter them again. Secrets saved by an earlier version are encrypted on the next start. This protects copies of the database; it doesn't protect against someone who can read every file on your computer.
 
 ## API
 
@@ -37,12 +39,14 @@ The database is `server/data/qa.db` (set `QA_DB` to use another file). Each AI r
 
   Secret values are never returned: you get `"masked": "••••ab"`. To keep a secret's value when updating, send it with `"value": null`.
 - `DELETE /api/environments/:id`
+- `GET /api/environments/compare?ids=1,2,3`: every variable in any of them, each environment's value, and `same` / `different` / `missing` (or `unknown` if a secret can't be decrypted). Secrets are compared here and returned only masked.
+- `POST /api/environments/:id/copy-from` `{ "source_id": 2, "keys": ["apiToken", "region"], "overwrite": false, "dry_run": true }`: copy variables from another environment into this one. Answers which keys were (or, with `dry_run`, would be) `added`, `overwritten`, left `unchanged`, `skipped` (different, and `overwrite` is off) or `not_found`. Secrets are copied on the server and stay secret.
 
 Every run uses the environment's `base_url` as `{{baseUrl}}`, and its variables override the collection's own.
 
 **Runs**
 - `POST /api/runs`: queued, then run one at a time. Three kinds:
-  - `{ "kind": "plain", "collection_id": 1, "environment_id": 1 }`: Newman only, free.
+  - `{ "kind": "plain", "collection_id": 1, "environment_id": 1 }`: Newman only, free. Add `"data_file_id"` to run once per row of a test-data file.
   - `{ "kind": "ai", "ai_mode": "regression", "collection_id": 1, "environment_id": 1 }`: the agents re-check a collection: debug, heal, mark known bugs, update it in Postman. Needs a collection imported from Postman.
   - `{ "kind": "ai", "ai_mode": "build", "request": "what to test", "workspace_id": "…", "environment_id": 1 }`: the agents plan (you approve the plan), build, fix and publish a new collection to that workspace; it's then imported here and the run linked to it.
 - `GET /api/runs?collection_id=&environment_id=&status=&kind=&limit=&before_id=`: newest first.
@@ -69,6 +73,11 @@ Every run uses the environment's `base_url` as `{{baseUrl}}`, and its variables 
 - `GET /api/schedules?collection_id=`, `POST /api/schedules` `{ "collection_id", "environment_id", "kind": "plain" | "ai", "cron": "0 7 * * 1-5", "enabled" }`, `PUT` / `DELETE /api/schedules/:id`.
 - `GET /api/schedules/preview?cron=…`: the next 3 times, or why the expression is invalid.
 - A schedule doesn't start a new run while its previous one is still going. Scheduled AI runs are unattended: changes that need approval are refused and appear in the report.
+
+**Test-data files** (CSV with a header row, or a JSON list of objects; up to 1 MB and 1000 rows). A plain run with one runs the collection once per row; each column is a variable (`{{email}}`, `pm.iterationData.get("email")`), and every result says which `iteration` (row, from 1) it belongs to.
+- `GET /api/collections/:id/data-files`, `POST /api/collections/:id/data-files` `{ "name": "users.csv", "content": "…", "replace": false }`: list and upload. Each file says which of its columns the collection `used` and which it didn't (`unused`).
+- `GET /api/data-files/:id` (with the first 20 rows), `GET /api/data-files/:id/download`, `DELETE /api/data-files/:id` (refused while a schedule uses it; runs keep its name).
+- Schedules take `"data_file_id"` too (plain runs only).
 
 **Run statuses:** `queued`, `running`, `passed`, `passed_with_known_bugs` (the only failures are in `KNOWN BUG` requests), `failed`, `server_issue` ("Facing server issues, please check <Env> Env"), `circuit_breaker`, `error`, `cancelled`.
 

@@ -1,12 +1,18 @@
 // Talks to the Postman API with the key saved in settings (or POSTMAN_API_KEY).
 // POSTMAN_API_BASE can point it elsewhere, which the tests use for a fake Postman.
-import { getSetting, type DB } from "./db.ts";
+import type { DB } from "./db.ts";
+import { getSecretSetting, SecretError } from "./secrets.ts";
 import { HttpError } from "./errors.ts";
 
 const base = () => process.env.POSTMAN_API_BASE ?? "https://api.getpostman.com";
 
 export function postmanKey(db: DB): string | null {
-  return getSetting(db, "postman_api_key") ?? process.env.POSTMAN_API_KEY ?? null;
+  try {
+    return getSecretSetting(db, "postman_api_key") ?? process.env.POSTMAN_API_KEY ?? null;
+  } catch (e) {
+    if (e instanceof SecretError) throw new HttpError(400, `The saved Postman API key can't be read: ${e.message}`);
+    throw e;
+  }
 }
 
 // Shown instead of the key: enough to recognise it, not enough to use it.

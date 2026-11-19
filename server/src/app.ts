@@ -9,6 +9,7 @@ import { RunManager } from "./runs/manager.ts";
 import { settingsRoutes } from "./routes/settings.ts";
 import { postmanRoutes } from "./routes/postman.ts";
 import { collectionsRoutes } from "./routes/collections.ts";
+import { dataFileRoutes } from "./routes/datafiles.ts";
 import { environmentsRoutes } from "./routes/environments.ts";
 import { runsRoutes } from "./routes/runs.ts";
 import { dashboardRoutes } from "./routes/dashboard.ts";
@@ -42,6 +43,7 @@ export function buildApp(db: DB = openDb(), opts: { logger?: boolean } = {}) {
   postmanRoutes(app, db);
   collectionsRoutes(app, db);
   environmentsRoutes(app, db);
+  dataFileRoutes(app, db);
   runsRoutes(app, db, runs);
   dashboardRoutes(app, db);
   insightsRoutes(app, db);

@@ -2,6 +2,8 @@
 // Uses a fake API and a fake Postman on this machine; no real services, no model calls.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { fakeApi, fakePostman, fixtureCollection, testApp, waitForRun, POSTMAN_KEY } from "./helpers.ts";
 
 let api: Awaited<ReturnType<typeof fakeApi>>, pm: Awaited<ReturnType<typeof fakePostman>>, app: any, db: any;
@@ -208,6 +210,10 @@ test("AI runs: starts the agents; a down server stops it before any model call",
   const types = events.map((e: any) => e.type);
   for (const t of ["run_started", "server_issue", "run_finished", "finished"]) assert.ok(types.includes(t), `missing ${t}: ${types.join(", ")}`);
   assert.equal(run.result.environment.label, "Test");
+  // The per-run settings file held the environment's secrets for the agent; it's gone once the run ends.
+  const dir = join(process.env.QA_RUNS_DIR!, String(run.id));
+  assert.ok(existsSync(join(dir, "result.json")), "the run's folder is where we expect");
+  assert.ok(!existsSync(join(dir, "qa.config.json")), "the per-run settings file was deleted");
 });
 
 test("approvals and cancelling: refused when the run isn't waiting or has finished", async () => {

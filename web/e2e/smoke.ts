@@ -235,6 +235,48 @@ await check("Run: email the report by hand, and open it", async () => {
   await report.close();
 });
 
+await check("Settings: says secrets are encrypted and where the key file is", async () => {
+  await page.goto(`${base}/settings`);
+  await page.getByText("are stored encrypted (AES-256-GCM)").waitFor();
+  await page.getByText(/secret\.key/).waitFor();
+});
+
+await check("Environments: compare side by side, then copy a secret into another environment", async () => {
+  await fetch(`${base}/api/environments`, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "stg", label: "Stg", base_url: api.url, health_path: "/health", variables: [{ key: "region", value: "us" }] }) });
+  await page.goto(`${base}/environments`);
+  await page.getByRole("link", { name: "Compare and copy" }).click();
+  await page.waitForURL(/\/environments\/compare/);
+  const row = (key: string) => page.getByRole("row", { name: new RegExp(`^${key}`) });
+  await row("apiToken").getByText("Missing").waitFor();
+  await row("apiToken").getByText("••••23").waitFor();
+  if ((await page.content()).includes("secret-123")) throw new Error("a secret value is on the page");
+  await row("apiToken").getByRole("button", { name: "Copy apiToken" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByText("add", { exact: true }).waitFor(); // the preview: it will be added to Stg
+  await dialog.getByRole("button", { name: "Copy 1 value to Stg" }).click();
+  await page.getByText("Copied 1 value to Stg").waitFor();
+  await row("apiToken").getByText("Same").waitFor();
+});
+
+await check("Test data: upload a CSV; a run goes once per row and shows which row failed", async () => {
+  const file = join(dir, "tokens.csv");
+  writeFileSync(file, "apiToken,note\nsecret-123,right\nwrong-token,wrong\n");
+  await page.goto(`${base}/collections/1`);
+  await page.getByLabel("Choose a CSV or JSON file").setInputFiles(file);
+  await page.getByText("tokens.csv: 2 rows, 2 columns").waitFor();
+  await page.getByRole("dialog").getByText("Not used: note.").waitFor(); // the preview opens after uploading
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Run", exact: true }).first().click();
+  await page.getByLabel("Test data").selectOption({ label: "tokens.csv (2 rows)" });
+  await button("Start run").click();
+  await page.waitForURL(/\/runs\/\d+$/);
+  await page.getByText("Failed", { exact: true }).first().waitFor({ timeout: 30_000 });
+  await page.getByText("Test data: tokens.csv, 2 rows, once per row").waitFor();
+  await page.getByText("· 3 requests passed").waitFor(); // row 1: the right token
+  await page.getByText("1 of 3 requests failed").waitFor(); // row 2: the wrong token
+});
+
 await check("Schedules page lists the schedule", async () => {
   await page.goto(`${base}/schedules`);
   await page.getByText("Weekdays at 07:00").waitFor();
@@ -249,7 +291,7 @@ await check("Theme: switching to dark is applied and remembered", async () => {
 
 await check("Phone width: no page scrolls sideways", async () => {
   await page.setViewportSize({ width: 390, height: 844 });
-  for (const path of ["/", "/collections", "/collections/1", "/environments", "/runs", "/runs/1", "/runs/3", "/known-bugs", "/changes", "/schedules", "/settings"]) {
+  for (const path of ["/", "/collections", "/collections/1", "/environments", "/environments/compare", "/runs", "/runs/1", "/runs/3", "/known-bugs", "/changes", "/schedules", "/settings"]) {
     await page.goto(base + path);
     await page.waitForLoadState("networkidle");
     const width = await page.evaluate(() => document.documentElement.scrollWidth);

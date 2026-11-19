@@ -41,7 +41,7 @@ export function failuresOf(run: ReportRun): { request: string; status: number | 
     return r.executions
       .filter((e: any) => e.assertions?.some((a: any) => a.error) || e.error || (e.status ?? 0) >= 500)
       .map((e: any) => ({
-        request: e.request, status: e.status ?? null, knownBug: e.request.startsWith("KNOWN BUG - "),
+        request: e.iteration ? `${e.request} (row ${e.iteration})` : e.request, status: e.status ?? null, knownBug: e.request.startsWith("KNOWN BUG - "),
         errors: [...(e.error ? [e.error] : []), ...e.assertions.filter((a: any) => a.error).map((a: any) => `${a.name}: ${a.error}`)],
       }));
   const byRequest = new Map<string, string[]>();
@@ -59,6 +59,7 @@ function header(run: ReportRun) {
     ["Collection", esc(run.collection_name)],
     ["Environment", esc(run.environment_label)],
     ["Kind", `${kind}${run.schedule_id ? " · scheduled" : ""}`],
+    ...(run.result?.data_file ? [["Test data", `${esc(run.result.data_file.name)}: ${run.result.data_file.rows} row${run.result.data_file.rows === 1 ? "" : "s"}, the collection ran once per row`] as [string, string]] : []),
     ["Started", esc(when(run.started_at ?? run.created_at))],
     ...(ms != null ? [["Duration", duration(ms)] as [string, string]] : []),
     ...(run.assertions != null ? [["Checks", `${run.failed_assertions} failed of ${run.assertions}, in ${run.requests} requests`] as [string, string]] : []),
@@ -94,7 +95,7 @@ export function reportHtml(run: ReportRun, dashboardUrl: string): string {
     <table style="border-collapse:collapse;width:100%;font-size:13px">
       <tr><th style="text-align:left;padding:6px;border-bottom:1px solid #e1e0d9">Request</th><th style="text-align:left;padding:6px;border-bottom:1px solid #e1e0d9">Status</th><th style="text-align:left;padding:6px;border-bottom:1px solid #e1e0d9">Time</th><th style="text-align:left;padding:6px;border-bottom:1px solid #e1e0d9">Checks</th></tr>
       ${r.executions.map((e: any) => `<tr>
-        <td style="padding:6px;border-bottom:1px solid #f0efec;vertical-align:top">${esc(e.request)}<div style="color:#898781;font-family:monospace;font-size:12px">${esc(e.method ?? "")} ${esc(e.url ?? "")}</div></td>
+        <td style="padding:6px;border-bottom:1px solid #f0efec;vertical-align:top">${esc(e.request)}${e.iteration ? ` <span style="color:#6b6a66">(row ${e.iteration})</span>` : ""}<div style="color:#898781;font-family:monospace;font-size:12px">${esc(e.method ?? "")} ${esc(e.url ?? "")}</div></td>
         <td style="padding:6px;border-bottom:1px solid #f0efec;vertical-align:top;font-family:monospace">${esc(e.status ?? e.error ?? "")}</td>
         <td style="padding:6px;border-bottom:1px solid #f0efec;vertical-align:top">${e.response_time_ms != null ? `${e.response_time_ms} ms` : ""}</td>
         <td style="padding:6px;border-bottom:1px solid #f0efec;vertical-align:top">${(e.assertions ?? []).map((a: any) => `<div style="color:${a.error ? "#b42323" : "#0a7a0a"}">${a.error ? "✗" : "✓"} ${esc(a.name)}${a.error ? `<div style="color:#52514e">${esc(a.error)}</div>` : ""}</div>`).join("")}</td>

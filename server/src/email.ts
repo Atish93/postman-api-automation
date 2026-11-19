@@ -1,6 +1,7 @@
 // Email: SMTP settings, deciding when a finished run is reported, sending, and the email log.
 import nodemailer from "nodemailer";
 import { getSetting, now, setSetting, type DB } from "./db.ts";
+import { getSecretSetting, setSecretSetting } from "./secrets.ts";
 import { HttpError } from "./errors.ts";
 import { failuresOf, loadReportRun, reportEmail, reportHtml, type ReportRun } from "./report.ts";
 
@@ -15,14 +16,14 @@ export const hasSmtpPassword = (db: DB) => !!getSetting(db, "smtp_password");
 
 export function saveSmtpSettings(db: DB, s: SmtpSettings, password: string | null | undefined) {
   setSetting(db, "smtp", JSON.stringify(s));
-  if (password === "") setSetting(db, "smtp_password", null); // cleared
-  else if (password) setSetting(db, "smtp_password", password); // null/undefined: keep the saved one
+  if (password === "") setSecretSetting(db, "smtp_password", null); // cleared
+  else if (password) setSecretSetting(db, "smtp_password", password); // null/undefined: keep the saved one (encrypted)
 }
 
 function transport(db: DB) {
   const s = smtpSettings(db);
   if (!s) throw new HttpError(400, "Email isn't set up. Add your SMTP details in Settings first.");
-  const pass = getSetting(db, "smtp_password");
+  const pass = getSecretSetting(db, "smtp_password");
   return {
     from: s.from || s.user,
     mailer: nodemailer.createTransport({

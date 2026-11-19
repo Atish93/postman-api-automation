@@ -30,6 +30,12 @@ const paths: Record<string, ReactNode> = {
   chevron: <path d="M7 4l6 6-6 6" />,
   key: <><circle cx="7" cy="12" r="3.5" /><path d="M9.5 9.5L16 3M13.5 5.5l2 2" /></>,
   menu: <path d="M3 5h14M3 10h14M3 15h14" />,
+  table: <><rect x="3" y="4" width="14" height="12" rx="1.5" /><path d="M3 8h14M3 12h14M8 4v12" /></>,
+  columns: <><rect x="3" y="4" width="14" height="12" rx="1.5" /><path d="M8 4v12M12 4v12" /></>,
+  copy: <><rect x="7" y="7" width="9" height="9" rx="1.5" /><path d="M13 7V5.5A1.5 1.5 0 0011.5 4h-6A1.5 1.5 0 004 5.5v6A1.5 1.5 0 005.5 13H7" /></>,
+  lock: <><rect x="4.5" y="9" width="11" height="8" rx="1.5" /><path d="M7 9V6.5a3 3 0 016 0V9" /></>,
+  minus: <path d="M5 10h10" />,
+  equal: <path d="M5 8h10M5 12h10" />,
 };
 export function Icon({ name, size = 16, className = "" }: { name: keyof typeof paths | string; size?: number; className?: string }) {
   return (

@@ -7,9 +7,10 @@ import { Button, Card, EmptyState, ErrorNote, Field, Icon, Modal, PageHeader, Sp
 export function EnvironmentsPage() {
   const envs = useQuery({ queryKey: ["environments"], queryFn: api.environments });
   const newButton = <Link to="/environments/new"><Button variant="primary" icon="plus">New environment</Button></Link>;
+  const actions = <>{(envs.data?.length ?? 0) >= 2 && <Link to="/environments/compare"><Button icon="columns">Compare and copy</Button></Link>}{newButton}</>;
   return (
     <>
-      <PageHeader title="Environments" subtitle="Where collections run: a base URL, a health check and variables." actions={newButton} />
+      <PageHeader title="Environments" subtitle="Where collections run: a base URL, a health check and variables." actions={actions} />
       <ErrorNote error={envs.error} />
       {envs.isPending ? <div className="flex justify-center py-20 text-muted"><Spinner size={24} /></div> : envs.data?.length === 0 ? (
         <Card><EmptyState icon="globe" title="No environments yet" action={newButton}>Add one for each place you test, e.g. Test, Stg and Prod.</EmptyState></Card>
@@ -98,7 +99,7 @@ export function EnvironmentEditPage() {
         </Card>
 
         <Card title="Variables" actions={<Button type="button" size="sm" icon="plus" onClick={() => setRows((r) => [...r, { ...blank }])}>Add variable</Button>}>
-          <p className="px-4 pt-3 text-xs text-ink-2">Values here override the collection's own variables. Mark credentials as secret: they're never shown again after saving.</p>
+          <p className="px-4 pt-3 text-xs text-ink-2">Values here override the collection's own variables. Mark credentials as secret: they're stored encrypted and never shown again after saving.</p>
           {rows.length === 0 ? <p className="px-4 py-4 text-sm text-muted">No variables.</p> : (
             <div className="space-y-2 p-4">
               {rows.map((r, i) => (

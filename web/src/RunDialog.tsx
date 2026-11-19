@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router";
 import { api, type Collection } from "./api.ts";
 import { Button, ErrorNote, Field, Icon, Modal, inputClass } from "./ui.tsx";
+import { DataFileSelect } from "./DataFiles.tsx";
 
 export function RunDialog({ collection, open, onClose }: { collection: Pick<Collection, "id" | "name" | "source">; open: boolean; onClose: () => void }) {
   const navigate = useNavigate();
@@ -11,11 +12,14 @@ export function RunDialog({ collection, open, onClose }: { collection: Pick<Coll
   const envs = useQuery({ queryKey: ["environments"], queryFn: api.environments, enabled: open });
   const [envId, setEnvId] = useState<number | null>(null);
   const [kind, setKind] = useState<"plain" | "ai">("plain");
+  const [dataFile, setDataFile] = useState<number | null>(null);
   const chosenEnv = envId ?? envs.data?.[0]?.id ?? null;
   const aiAllowed = collection.source === "postman";
 
   const start = useMutation({
-    mutationFn: () => api.startRun(kind === "ai" ? { kind, ai_mode: "regression", collection_id: collection.id, environment_id: chosenEnv! } : { kind, collection_id: collection.id, environment_id: chosenEnv! }),
+    mutationFn: () => api.startRun(kind === "ai"
+      ? { kind, ai_mode: "regression", collection_id: collection.id, environment_id: chosenEnv! }
+      : { kind, collection_id: collection.id, environment_id: chosenEnv!, ...(dataFile && { data_file_id: dataFile }) }),
     onSuccess: (run) => {
       qc.invalidateQueries({ queryKey: ["runs"] });
       onClose();
@@ -59,6 +63,7 @@ export function RunDialog({ collection, open, onClose }: { collection: Pick<Coll
           {option("ai", "AI run", "The agents re-check the collection: they debug failures, fix broken tests, mark API bugs as known bugs and update the collection in Postman. Costs a few cents; changes to assertions wait for your approval.",
             aiAllowed ? undefined : "AI runs need a collection imported from Postman. This one was uploaded.")}
         </fieldset>
+        {kind === "plain" && open && <DataFileSelect collectionId={collection.id} value={dataFile} onChange={setDataFile} />}
         <ErrorNote error={start.error} />
       </div>
     </Modal>

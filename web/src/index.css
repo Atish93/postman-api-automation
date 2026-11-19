@@ -19,6 +19,7 @@
   --accent-ink: #ffffff;
   --good-ink: #006300;     /* positive deltas as text */
   --bad-ink: #b42323;
+  --warn-ink: #8a4a00;     /* warnings as text */
   /* Status colours: fixed, always paired with an icon and a label. */
   --status-good: #0ca30c;
   --status-warning: #fab219;
@@ -41,6 +42,8 @@
     --accent: #3987e5;
     --good-ink: #0ca30c;
     --bad-ink: #e66767;
+  --warn-ink: #f0a35a;
+    --warn-ink: #f0a35a;
   }
 }
 :root[data-theme="dark"] {
@@ -71,6 +74,7 @@
   --color-accent-ink: var(--accent-ink);
   --color-good-ink: var(--good-ink);
   --color-bad-ink: var(--bad-ink);
+  --color-warn-ink: var(--warn-ink);
   --color-good: var(--status-good);
   --color-warning: var(--status-warning);
   --color-serious: var(--status-serious);

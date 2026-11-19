@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import { api, type Schedule } from "../api.ts";
 import { dateTime, relativeTime } from "../format.ts";
 import { DAYS, describeCron, fromCron, toCron, type Frequency } from "../schedule.ts";
+import { DataFileSelect } from "../DataFiles.tsx";
 import { Button, Card, EmptyState, ErrorNote, Field, Icon, KindBadge, Modal, PageHeader, Spinner, StatusBadge, inputClass, useToast } from "../ui.tsx";
 
 const inFuture = (iso: string) => {
@@ -22,11 +23,11 @@ export function ScheduleForm({ open, onClose, collectionId, editing }: { open: b
   const toast = useToast();
   const collections = useQuery({ queryKey: ["collections"], queryFn: api.collections, enabled: open });
   const envs = useQuery({ queryKey: ["environments"], queryFn: api.environments, enabled: open });
-  const [form, setForm] = useState(() => ({ collection: 0, environment: 0, kind: "plain" as "plain" | "ai", enabled: true, ...fromCron("0 7 * * 1-5") }));
+  const [form, setForm] = useState(() => ({ collection: 0, environment: 0, kind: "plain" as "plain" | "ai", enabled: true, dataFile: null as number | null, ...fromCron("0 7 * * 1-5") }));
   useEffect(() => {
     if (!open) return;
-    if (editing) setForm({ collection: editing.collection.id, environment: editing.environment.id, kind: editing.kind, enabled: editing.enabled, ...fromCron(editing.cron) });
-    else setForm({ collection: collectionId ?? 0, environment: 0, kind: "plain", enabled: true, ...fromCron("0 7 * * 1-5") });
+    if (editing) setForm({ collection: editing.collection.id, environment: editing.environment.id, kind: editing.kind, enabled: editing.enabled, dataFile: editing.data_file?.id ?? null, ...fromCron(editing.cron) });
+    else setForm({ collection: collectionId ?? 0, environment: 0, kind: "plain", enabled: true, dataFile: null, ...fromCron("0 7 * * 1-5") });
   }, [open, editing, collectionId]);
   const collection = form.collection || collections.data?.[0]?.id || 0;
   const environment = form.environment || envs.data?.[0]?.id || 0;
@@ -35,7 +36,7 @@ export function ScheduleForm({ open, onClose, collectionId, editing }: { open: b
   const preview = useQuery({ queryKey: ["schedule-preview", cron], queryFn: () => api.schedulePreview(cron), enabled: open && cron.split(/\s+/).length === 5, retry: false });
   const save = useMutation({
     mutationFn: () => {
-      const input = { collection_id: collection, environment_id: environment, kind: form.kind, cron, enabled: form.enabled };
+      const input = { collection_id: collection, environment_id: environment, kind: form.kind, cron, enabled: form.enabled, data_file_id: form.kind === "plain" ? form.dataFile : null };
       return editing ? api.updateSchedule(editing.id, input) : api.createSchedule(input);
     },
     onSuccess: (s) => {
@@ -52,7 +53,7 @@ export function ScheduleForm({ open, onClose, collectionId, editing }: { open: b
       <div className="space-y-4">
         {!collectionId && (
           <Field label="Collection">
-            <select className={inputClass} value={collection} onChange={(e) => set({ collection: Number(e.target.value) })}>
+            <select className={inputClass} value={collection} onChange={(e) => set({ collection: Number(e.target.value), dataFile: null })}>
               {collections.data?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </Field>
@@ -68,6 +69,7 @@ export function ScheduleForm({ open, onClose, collectionId, editing }: { open: b
             <option value="ai" disabled={chosen?.source !== "postman"}>AI run{chosen?.source !== "postman" ? " (needs a collection from Postman)" : ""}</option>
           </select>
         </Field>
+        {form.kind === "plain" && collection > 0 && <DataFileSelect collectionId={collection} value={form.dataFile} onChange={(dataFile) => set({ dataFile })} />}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="How often">
             <select className={inputClass} value={form.frequency} onChange={(e) => set({ frequency: e.target.value as Frequency })}>
@@ -114,7 +116,7 @@ export function ScheduleList({ collectionId, compact }: { collectionId?: number;
   const q = useQuery({ queryKey: ["schedules", collectionId ?? "all"], queryFn: () => api.schedules(collectionId), refetchInterval: 30_000 });
   const [editing, setEditing] = useState<Schedule | null>(null);
   const toggle = useMutation({
-    mutationFn: (s: Schedule) => api.updateSchedule(s.id, { collection_id: s.collection.id, environment_id: s.environment.id, kind: s.kind, cron: s.cron, enabled: !s.enabled }),
+    mutationFn: (s: Schedule) => api.updateSchedule(s.id, { collection_id: s.collection.id, environment_id: s.environment.id, kind: s.kind, cron: s.cron, enabled: !s.enabled, data_file_id: s.data_file?.id ?? null }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["schedules"] }),
     onError: (e) => toast("error", e.message),
   });
@@ -136,7 +138,7 @@ export function ScheduleList({ collectionId, compact }: { collectionId?: number;
               <div className="flex flex-wrap items-center gap-2 text-sm font-medium">{describeCron(s.cron)} <KindBadge kind={s.kind} /></div>
               <div className="text-xs text-muted">
                 {!compact && <><Link to={`/collections/${s.collection.id}`} className="hover:text-accent">{s.collection.name}</Link> · </>}
-                {s.environment.label} · {s.enabled && s.next_run_at ? <span title={dateTime(s.next_run_at)}>next {inFuture(s.next_run_at)}</span> : "paused"}
+                {s.environment.label}{s.data_file && <> · <Icon name="table" size={12} className="inline align-[-2px]" /> {s.data_file.name}</>} · {s.enabled && s.next_run_at ? <span title={dateTime(s.next_run_at)}>next {inFuture(s.next_run_at)}</span> : "paused"}
               </div>
             </div>
             {s.last_run && <Link to={`/runs/${s.last_run.id}`} className="flex items-center gap-2" title={`Last run ${relativeTime(s.last_run.created_at)}`}><StatusBadge status={s.last_run.status} /></Link>}

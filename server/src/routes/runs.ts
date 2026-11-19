@@ -8,6 +8,7 @@ import { FINISHED, type RunManager } from "../runs/manager.ts";
 const view = (r: any, withResult = false) => ({
   id: r.id, kind: r.kind, ai_mode: r.ai_mode ?? null, request: r.request ?? null, status: r.status, message: r.message,
   schedule_id: r.schedule_id ?? null, unattended: !!r.unattended,
+  data_file: r.data_file_name ? { id: r.data_file_id ?? null, name: r.data_file_name } : null,
   collection: { id: r.collection_id, name: r.collection_name },
   environment: { id: r.environment_id, label: r.environment_label },
   requests: r.requests, assertions: r.assertions, failed_assertions: r.failed_assertions,
@@ -16,6 +17,15 @@ const view = (r: any, withResult = false) => ({
   duration_ms: r.started_at && r.finished_at ? Date.parse(r.finished_at) - Date.parse(r.started_at) : null,
   ...(withResult && { result: r.result_json ? JSON.parse(r.result_json) : null }),
 });
+
+// A data file can drive a plain run of its own collection.
+export function checkDataFile(db: DB, id: number, kind: string, collectionId: number | null) {
+  if (kind !== "plain") throw new HttpError(400, "Test-data files are for plain runs. AI runs choose their own test data.");
+  const f = db.prepare("SELECT id, name, collection_id FROM data_files WHERE id = ?").get(id) as any;
+  if (!f) throw new HttpError(404, "Data file not found.");
+  if (f.collection_id !== collectionId) throw new HttpError(400, "That data file belongs to a different collection.");
+  return f as { id: number; name: string };
+}
 
 export function runsRoutes(app: FastifyInstance, db: DB, runs: RunManager) {
   const getRow = (id: number) => {
@@ -33,6 +43,7 @@ export function runsRoutes(app: FastifyInstance, db: DB, runs: RunManager) {
       collection_id: z.number().int().optional(),
       request: z.string().trim().max(2000).optional(),
       workspace_id: z.string().trim().min(1).optional(),
+      data_file_id: z.number().int().optional(), // plain runs: run once per row of this test-data file
     }).parse(req.body);
     const e = db.prepare("SELECT id, label FROM environments WHERE id = ?").get(body.environment_id) as any;
     if (!e) throw new HttpError(404, "Environment not found.");
@@ -53,9 +64,11 @@ export function runsRoutes(app: FastifyInstance, db: DB, runs: RunManager) {
         throw new HttpError(400, "AI runs need a collection imported from Postman (the agents read and update it there). Uploaded collections can have plain runs.");
       collection = { id: c.id, name: c.name };
     }
-    const id = Number(db.prepare(`INSERT INTO runs (collection_id, environment_id, collection_name, environment_label, kind, ai_mode, request, workspace_id, status, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`)
-      .run(collection.id, e.id, collection.name, e.label, body.kind, body.kind === "ai" ? body.ai_mode : null, build ? body.request! : null, build ? body.workspace_id! : null, now()).lastInsertRowid);
+    const dataFile = body.data_file_id ? checkDataFile(db, body.data_file_id, body.kind, collection.id) : null;
+    const id = Number(db.prepare(`INSERT INTO runs (collection_id, environment_id, collection_name, environment_label, kind, ai_mode, request, workspace_id, data_file_id, data_file_name, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`)
+      .run(collection.id, e.id, collection.name, e.label, body.kind, body.kind === "ai" ? body.ai_mode : null, build ? body.request! : null, build ? body.workspace_id! : null,
+        dataFile?.id ?? null, dataFile?.name ?? null, now()).lastInsertRowid);
     runs.addEvent(id, "status", { status: "queued" });
     runs.enqueue(id);
     reply.code(202);

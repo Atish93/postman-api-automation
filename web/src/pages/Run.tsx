@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router";
 import { api, type AiCollectionResult, type Execution, type Run, type RunEvent } from "../api.ts";
@@ -137,6 +137,16 @@ function ApprovalCard({ run, request, answered }: { run: Run; request: RunEvent;
 }
 
 // ---------- Plain runs: one row per request ----------
+function RowHeading({ row, items }: { row: number; items: any[] }) {
+  const bad = items.filter((x) => x.error || (x.status ?? 0) >= 500 || (x.assertions ?? x.failed_assertions ?? []).some((a: any) => a.error)).length;
+  return (
+    <li className="flex items-center gap-2 bg-raised px-4 py-1.5 text-xs font-medium text-ink-2">
+      <Icon name="table" size={12} />Row {row}
+      <span className="font-normal text-muted">· {bad ? `${bad} of ${items.length} request${items.length === 1 ? "" : "s"} failed` : `${items.length} request${items.length === 1 ? "" : "s"} passed`}</span>
+    </li>
+  );
+}
+
 function RequestRow({ e }: { e: Execution | (RunEvent["data"] & { request: string }) }) {
   const [open, setOpen] = useState(false);
   const failed: { name: string; error: string }[] = "assertions" in e && Array.isArray(e.assertions) ? e.assertions.filter((a: any) => a.error) : ((e as { failed_assertions?: { name: string; error: string }[] }).failed_assertions ?? []); // live records list only the failures
@@ -151,6 +161,7 @@ function RequestRow({ e }: { e: Execution | (RunEvent["data"] & { request: strin
           <span className="text-ink-2">{label}</span>
         </span>
         <span className="min-w-0 flex-1 truncate text-sm">{e.request}</span>
+        {typeof e.iteration === "number" && <span className="shrink-0 rounded bg-raised px-1.5 py-0.5 text-xs text-ink-2 ring-1 ring-line tabular">row {e.iteration}</span>}
         <span className="tabular shrink-0 font-mono text-xs text-ink-2">{status ?? "—"}</span>
         <span className="tabular w-16 shrink-0 text-right text-xs text-muted">{duration(e.response_time_ms)}</span>
         <Icon name="chevron" className={`shrink-0 text-muted transition ${open ? "rotate-90" : ""}`} />
@@ -307,6 +318,7 @@ export function RunPage() {
             {" "}on {r.environment.label} · started {dateTime(r.started_at ?? r.created_at)}
             {r.duration_ms != null && ` · took ${duration(r.duration_ms)}`}{r.kind === "ai" && r.cost_usd != null && ` · AI cost ${money(r.cost_usd)}`}
           </p>
+          {r.data_file && <p className="mt-1 flex items-center gap-1.5 text-xs text-muted"><Icon name="table" size={12} />Test data: {r.data_file.name}{executions && "data_file" in (result as any) ? `, ${(result as any).data_file.rows} rows, once per row` : ""}{r.data_file.id === null && " (since deleted)"}</p>}
           {r.schedule_id && <p className="mt-1 flex items-center gap-1.5 text-xs text-muted"><Icon name="clock" size={12} />Started by a <Link to="/schedules" className="text-accent hover:underline">schedule</Link>{r.kind === "ai" && ". Unattended: changes needing approval were refused"}</p>}
         </div>
         <div className="flex flex-wrap gap-2">
@@ -343,7 +355,13 @@ export function RunPage() {
         {r.kind === "plain" ? (
           <Card title={going ? <span className="flex items-center gap-2">Requests <Spinner size={12} /></span> : "Requests"}>
             {(executions ?? live).length === 0 ? <p className="px-4 py-6 text-sm text-ink-2">{going ? "Waiting for the first request…" : "No requests ran."}</p> : (
-              <ul className="divide-y divide-line">{(executions ?? live).map((e, i) => <RequestRow key={i} e={e as any} />)}</ul>
+              <ul className="divide-y divide-line">{(executions ?? live).map((e: any, i, all: any[]) => (
+                <Fragment key={i}>
+                  {/* With a data file: a heading where each row's requests start, with how that row did. */}
+                  {typeof e.iteration === "number" && e.iteration !== all[i - 1]?.iteration && <RowHeading row={e.iteration} items={all.filter((x) => x.iteration === e.iteration)} />}
+                  <RequestRow e={e} />
+                </Fragment>
+              ))}</ul>
             )}
           </Card>
         ) : (

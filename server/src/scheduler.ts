@@ -37,17 +37,19 @@ export class Scheduler {
   // Starts every due schedule. Returns the run ids started (the tests call this directly).
   tick(at = new Date()): number[] {
     const started: number[] = [];
-    const due = this.db.prepare(`SELECT s.*, c.name AS collection_name, c.postman_uid, e.label AS environment_label
+    const due = this.db.prepare(`SELECT s.*, c.name AS collection_name, c.postman_uid, e.label AS environment_label, f.name AS data_file_name
       FROM schedules s JOIN collections c ON c.id = s.collection_id JOIN environments e ON e.id = s.environment_id
+      LEFT JOIN data_files f ON f.id = s.data_file_id
       WHERE s.enabled = 1 AND s.next_run_at <= ?`).all(at.toISOString()) as any[];
     for (const s of due) {
       this.db.prepare("UPDATE schedules SET next_run_at = ? WHERE id = ?").run(nextRuns(s.cron, at, 1)[0].toISOString(), s.id);
       // Don't pile up: skip if this schedule's previous run hasn't finished.
       if (this.db.prepare("SELECT 1 FROM runs WHERE schedule_id = ? AND status IN ('queued', 'running')").get(s.id)) continue;
       if (s.kind === "ai" && !s.postman_uid) continue; // AI runs need a Postman collection (checked when saving too)
-      const id = Number(this.db.prepare(`INSERT INTO runs (collection_id, environment_id, collection_name, environment_label, kind, ai_mode, schedule_id, unattended, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'queued', ?)`)
-        .run(s.collection_id, s.environment_id, s.collection_name, s.environment_label, s.kind, s.kind === "ai" ? "regression" : null, s.id, now()).lastInsertRowid);
+      const id = Number(this.db.prepare(`INSERT INTO runs (collection_id, environment_id, collection_name, environment_label, kind, ai_mode, schedule_id, unattended, data_file_id, data_file_name, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'queued', ?)`)
+        .run(s.collection_id, s.environment_id, s.collection_name, s.environment_label, s.kind, s.kind === "ai" ? "regression" : null, s.id,
+          s.kind === "plain" ? s.data_file_id ?? null : null, s.kind === "plain" ? s.data_file_name ?? null : null, now()).lastInsertRowid);
       this.runs.addEvent(id, "status", { status: "queued", scheduled: true });
       this.runs.enqueue(id);
       started.push(id);

@@ -4,7 +4,10 @@ export type RunStatus =
   | "queued" | "running" | "passed" | "passed_with_known_bugs" | "failed"
   | "server_issue" | "circuit_breaker" | "error" | "cancelled";
 
-export type Settings = { postman: { connected: boolean; key_hint: string | null; user?: string | null } };
+export type Settings = {
+  postman: { connected: boolean; key_hint: string | null; user?: string | null };
+  secrets?: { key_source: "file" | "env" | "memory"; key_file: string | null };
+};
 export type Workspace = { id: string; name: string; type: string };
 export type PostmanCollection = { uid: string; name: string; imported: boolean };
 
@@ -17,7 +20,21 @@ export type CollectionDetail = Collection & {
   requests: { name: string; folder: string | null; method: string; url: string }[];
 };
 
-export type Variable = { key: string; value: string | null; secret: boolean; masked?: string };
+export type Variable = { key: string; value: string | null; secret: boolean; masked?: string; unreadable?: boolean };
+
+export type CompareCell = { present: false } | { present: true; secret: boolean; value: string | null; masked?: string };
+export type Comparison = {
+  environments: { id: number; name: string; label: string; base_url: string; health_path: string }[];
+  rows: { key: string; status: "same" | "different" | "missing" | "unknown"; cells: CompareCell[] }[];
+  counts: Record<"same" | "different" | "missing" | "unknown", number>;
+};
+export type CopyResult = {
+  dry_run: boolean; added: string[]; overwritten: string[]; unchanged: string[]; skipped: string[]; not_found: string[]; environment: Environment;
+};
+export type DataFile = {
+  id: number; collection_id: number; name: string; format: "csv" | "json"; columns: string[]; row_count: number; created_at: string;
+  used: string[]; unused: string[]; schedules: number; preview?: Record<string, string>[];
+};
 export type Environment = {
   id: number; name: string; label: string; base_url: string; health_path: string;
   variables: Variable[]; created_at: string; updated_at: string;
@@ -29,6 +46,7 @@ export type EnvironmentInput = Omit<Environment, "id" | "created_at" | "updated_
 export type Execution = {
   request: string; method?: string; url?: string; status: number | null; response_time_ms: number | null;
   error: string | null; body?: string; assertions: { name: string; error: string | null }[];
+  iteration?: number; // runs with a test-data file: which row (from 1)
 };
 export type AiCollectionResult = {
   name: string; uid: string | null; requests: number; assertions: number; failed_assertions: number;
@@ -40,6 +58,7 @@ export type AiCollectionResult = {
 export type Run = {
   id: number; kind: "plain" | "ai"; ai_mode: "regression" | "build" | null; request: string | null; status: RunStatus; message: string | null;
   schedule_id: number | null; unattended: boolean;
+  data_file: { id: number | null; name: string } | null;
   collection: { id: number | null; name: string }; environment: { id: number | null; label: string };
   requests: number | null; assertions: number | null; failed_assertions: number | null;
   cost_usd: number | null; exit_code: number | null;
@@ -70,7 +89,7 @@ export type HealerChange = {
   request: string; part: string; reason: string; diff: string[]; approved_by_human: boolean; outcome: "kept" | "reverted" | "unproven";
 };
 export type StartRun =
-  | { kind: "plain"; collection_id: number; environment_id: number }
+  | { kind: "plain"; collection_id: number; environment_id: number; data_file_id?: number }
   | { kind: "ai"; ai_mode: "regression"; collection_id: number; environment_id: number }
   | { kind: "ai"; ai_mode: "build"; request: string; workspace_id: string; environment_id: number };
 
@@ -79,9 +98,10 @@ export type ReportRule = { recipients: string[]; send_when: "always" | "failure"
 export type Schedule = {
   id: number; kind: "plain" | "ai"; cron: string; enabled: boolean; next_run_at: string | null;
   collection: { id: number; name: string }; environment: { id: number; label: string };
+  data_file: { id: number; name: string } | null;
   last_run: { id: number; status: RunStatus; created_at: string } | null;
 };
-export type ScheduleInput = { collection_id: number; environment_id: number; kind: "plain" | "ai"; cron: string; enabled: boolean };
+export type ScheduleInput = { collection_id: number; environment_id: number; kind: "plain" | "ai"; cron: string; enabled: boolean; data_file_id: number | null };
 export type SentEmail = { id: number; run_id: number; recipients: string[]; subject: string; status: "sent" | "failed"; error: string | null; trigger: "rule" | "manual"; created_at: string };
 
 export class ApiError extends Error {}
@@ -116,6 +136,15 @@ export const api = {
   createEnvironment: (e: EnvironmentInput) => request<Environment>("POST", "/environments", e),
   updateEnvironment: (id: number, e: EnvironmentInput) => request<Environment>("PUT", `/environments/${id}`, e),
   deleteEnvironment: (id: number) => request<void>("DELETE", `/environments/${id}`),
+  compareEnvironments: (ids: number[]) => request<Comparison>("GET", `/environments/compare?ids=${ids.join(",")}`),
+  copyVariables: (targetId: number, body: { source_id: number; keys: string[]; overwrite: boolean; dry_run: boolean }) =>
+    request<CopyResult>("POST", `/environments/${targetId}/copy-from`, body),
+
+  dataFiles: (collectionId: number) => request<DataFile[]>("GET", `/collections/${collectionId}/data-files`),
+  dataFile: (id: number) => request<DataFile>("GET", `/data-files/${id}`),
+  uploadDataFile: (collectionId: number, body: { name: string; content: string; replace?: boolean }) => request<DataFile>("POST", `/collections/${collectionId}/data-files`, body),
+  deleteDataFile: (id: number) => request<void>("DELETE", `/data-files/${id}`),
+  dataFileUrl: (id: number) => `/api/data-files/${id}/download`,
 
   runs: (filters: Record<string, string | number | undefined> = {}) => {
     const q = new URLSearchParams(Object.entries(filters).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]));

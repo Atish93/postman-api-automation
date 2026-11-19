@@ -30,8 +30,8 @@ A web dashboard around the agent team in `agent/`: connect Postman collections, 
 | 2 | Web UI: Dashboard, Collections, Environments, Runs (live log) | **Done** (`web/`) |
 | 3 | AI runs from the UI: regression/build, live log, approval buttons, cost | **Done** |
 | 4 | Email reports (summary + HTML report + link) and schedules | **Done** |
-| 5 | Data across environments: encrypted secrets, compare, copy values, test-data files | Next |
-| 6 | Hardening: logins, Postgres, job queue, Docker, deployment, backups, audit log | |
+| 5 | Data across environments: encrypted secrets, compare, copy values, test-data files | **Done** |
+| 6 | Hardening: logins, Postgres, job queue, Docker, deployment, backups, audit log | Next |
 
 ### 0. Engine (done)
 - `QA_EVENTS=1`: one `@@event {json}` line per event on stdout.
@@ -71,10 +71,12 @@ SMTP settings with a test email; per-collection recipients and when to send (alw
 3. Email: summary, link to the run, full HTML report attached.
 4. Schedules, e.g. weekdays 07:00 on Stg.
 
-### 5. Data across environments
-1. Secret variables encrypted at rest, never sent to the browser in full.
-2. Side-by-side comparison of environments; copy values between them.
-3. Test-data files for running a collection once per data row.
+### 5. Data across environments (done)
+Secrets encrypted in the database (AES-256-GCM, key in `server/data/secret.key`); Environments → Compare and copy; a Test data card on each collection, a data-file choice when running or scheduling, results grouped by row.
+
+1. Secret variables, the Postman API key and the email password encrypted at rest; existing plain values are encrypted on the next start. Never sent to the browser in full. An AI run's settings file (which holds the environment's secrets for the agent) is readable only by its owner and deleted when the run ends.
+2. Side-by-side comparison of environments (same / different / missing; secrets compared on the server); copy chosen values between them, with a preview and without overwriting unless asked.
+3. Test-data files (CSV or JSON) for running a collection once per data row; which columns the collection doesn't use; the row of every failure in the run, the report and the email.
 
 ### 6. Hardening
 Logins and roles, Postgres, a job queue for parallel runs, Docker, deployment guide, backups, audit log of approvals.

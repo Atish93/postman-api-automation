@@ -4,6 +4,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { encryptExisting, initSecrets } from "./secrets.ts";
 import { fileURLToPath } from "node:url";
 
 export type DB = DatabaseSync;
@@ -123,6 +124,24 @@ const migrations: string[] = [
   ALTER TABLE runs ADD COLUMN schedule_id INTEGER REFERENCES schedules(id) ON DELETE SET NULL;
   ALTER TABLE runs ADD COLUMN unattended INTEGER NOT NULL DEFAULT 0;  -- nobody to answer approvals: they are refused
   `,
+  // 4: phase 5 - test-data files (secrets are encrypted in code, see secrets.ts; no schema change)
+  `
+  CREATE TABLE data_files (
+    id            INTEGER PRIMARY KEY,
+    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,
+    format        TEXT NOT NULL CHECK (format IN ('csv', 'json')),
+    content       TEXT NOT NULL,                -- the file as uploaded
+    columns       TEXT NOT NULL,                -- JSON array of column names
+    row_count     INTEGER NOT NULL,
+    created_at    TEXT NOT NULL,
+    UNIQUE (collection_id, name)
+  );
+
+  ALTER TABLE runs ADD COLUMN data_file_id INTEGER REFERENCES data_files(id) ON DELETE SET NULL;
+  ALTER TABLE runs ADD COLUMN data_file_name TEXT;    -- kept if the file is deleted later
+  ALTER TABLE schedules ADD COLUMN data_file_id INTEGER REFERENCES data_files(id) ON DELETE SET NULL;
+  `,
 ];
 
 export function openDb(path = process.env.QA_DB ?? fileURLToPath(new URL("../data/qa.db", import.meta.url))): DB {
@@ -136,6 +155,9 @@ export function openDb(path = process.env.QA_DB ?? fileURLToPath(new URL("../dat
     db.exec(`PRAGMA user_version = ${v + 1}`);
     db.exec("COMMIT");
   }
+  initSecrets(path);
+  const encrypted = encryptExisting(db); // secrets saved before encryption existed
+  if (encrypted) console.log(`Encrypted ${encrypted} secret value(s) that were stored in plain text.`);
   return db;
 }
 

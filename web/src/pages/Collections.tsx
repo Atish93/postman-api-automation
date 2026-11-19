@@ -6,6 +6,7 @@ import { RunDialog } from "../RunDialog.tsx";
 import { BuildDialog } from "../BuildDialog.tsx";
 import { ReportsCard } from "../ReportsCard.tsx";
 import { ScheduleForm, ScheduleList } from "./Schedules.tsx";
+import { TestDataCard } from "../DataFiles.tsx";
 import { RunsTable } from "./Runs.tsx";
 import { relativeTime } from "../format.ts";
 import { Button, Card, EmptyState, ErrorNote, Field, Icon, MethodBadge, Modal, PageHeader, Spinner, StatusBadge, inputClass, useToast } from "../ui.tsx";
@@ -222,6 +223,7 @@ export function CollectionPage() {
           <Card title="Schedules" actions={<Button size="sm" icon="plus" onClick={() => setScheduling(true)}>Add</Button>}>
             <ScheduleList collectionId={id} compact />
           </Card>
+          <TestDataCard collectionId={id} />
           <ReportsCard collectionId={id} />
         </div>
       </div>

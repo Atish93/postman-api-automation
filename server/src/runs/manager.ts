@@ -16,6 +16,8 @@ export type RunRow = {
   workspace_id: string | null;
   schedule_id: number | null;
   unattended: number; // 1: nobody can answer approvals (scheduled runs), so they are refused
+  data_file_id: number | null;   // plain runs: once per row of this test-data file
+  data_file_name: string | null;
   status: string;
 };
 

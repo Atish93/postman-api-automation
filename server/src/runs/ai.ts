@@ -3,9 +3,10 @@
 // a result file (QA_RESULT_FILE), and a settings file written for this run (QA_CONFIG).
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { getSetting, type DB } from "../db.ts";
+import type { DB } from "../db.ts";
+import { getSecretSetting } from "../secrets.ts";
 import type { RunOutcome, RunRow } from "./manager.ts";
 import { statusFromFailures } from "./manager.ts";
 import { loadEnvironment } from "./environment.ts";
@@ -39,10 +40,13 @@ export function runAi(db: DB, run: RunRow, emit: Emit): AiHandle {
   const config = JSON.parse(readFileSync(join(agentDir(), "qa.config.json"), "utf8"));
   config.environments = { [env.name]: { label: env.label, baseUrl: env.baseUrl, healthPath: env.healthPath, variables: env.variables } };
   config.defaultEnvironment = env.name;
-  writeFileSync(join(dir, "qa.config.json"), JSON.stringify(config, null, 2));
+  // It holds the environment's secrets in plain text for the agent, so only the owner can read it,
+  // and it is deleted as soon as the agent process ends.
+  const configFile = join(dir, "qa.config.json");
+  writeFileSync(configFile, JSON.stringify(config, null, 2), { mode: 0o600 });
   const resultFile = join(dir, "result.json");
 
-  const postmanKey = getSetting(db, "postman_api_key");
+  const postmanKey = getSecretSetting(db, "postman_api_key");
   const child = spawn("npx", ["tsx", "orchestrator.ts", "--env", env.name, ...args], {
     cwd: agentDir(),
     env: {
@@ -51,11 +55,12 @@ export function runAi(db: DB, run: RunRow, emit: Emit): AiHandle {
       QA_EVENTS: "1",
       // Scheduled runs are unattended: approval requests are refused instead of waiting forever.
       ...(run.unattended ? { QA_NO_PROMPTS: "1" } : {}),
-      QA_CONFIG: join(dir, "qa.config.json"),
+      QA_CONFIG: configFile,
       QA_RESULT_FILE: resultFile,
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
+  child.on("error", () => rmSync(configFile, { force: true }));
 
   let waitingForApproval = false;
   let cancelled = false;
@@ -82,6 +87,7 @@ export function runAi(db: DB, run: RunRow, emit: Emit): AiHandle {
   const done = (async (): Promise<RunOutcome> => {
     const reading = Promise.all([readLines(child.stdout!, "stdout"), readLines(child.stderr!, "stderr")]);
     const code: number | null = await new Promise((r) => child.on("close", r));
+    rmSync(configFile, { force: true });
     await reading;
     if (cancelled) return { status: "cancelled", message: "Cancelled while running.", exit_code: code };
 

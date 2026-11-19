@@ -1,5 +1,6 @@
 // Loads an environment with its variables, as runs need it.
 import type { DB } from "../db.ts";
+import { decrypt, SecretError } from "../secrets.ts";
 
 export type RunEnvironment = {
   name: string;
@@ -10,14 +11,22 @@ export type RunEnvironment = {
 };
 
 export function loadEnvironment(db: DB, id: number): RunEnvironment {
-  const e = db.prepare("SELECT * FROM environments WHERE id = ?").get(id) as any;
-  if (!e) throw new Error("The environment no longer exists.");
-  const vars = db.prepare("SELECT key, value FROM variables WHERE environment_id = ?").all(id) as any[];
+  const env = db.prepare("SELECT * FROM environments WHERE id = ?").get(id) as any;
+  if (!env) throw new Error("The environment no longer exists.");
+  const vars = (db.prepare("SELECT key, value, secret FROM variables WHERE environment_id = ?").all(id) as any[]).map((v) => {
+    if (!v.secret) return v;
+    try {
+      return { ...v, value: decrypt(v.value) };
+    } catch (e) {
+      if (e instanceof SecretError) throw new Error(`The secret variable "${v.key}" of ${env.label} can't be read. ${e.message}`);
+      throw e;
+    }
+  });
   return {
-    name: e.name,
-    label: e.label,
-    baseUrl: e.base_url,
-    healthPath: e.health_path,
+    name: env.name,
+    label: env.label,
+    baseUrl: env.base_url,
+    healthPath: env.health_path,
     variables: Object.fromEntries(vars.map((v) => [v.key, v.value])),
   };
 }

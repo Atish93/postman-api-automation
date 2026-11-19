@@ -19,6 +19,7 @@ export function SettingsPage() {
     },
   });
   const p = settings.data?.postman;
+  const s = settings.data?.secrets;
 
   return (
     <>
@@ -34,7 +35,7 @@ export function SettingsPage() {
             )}
             <form className="flex flex-col gap-2 sm:flex-row sm:items-end" onSubmit={(e) => { e.preventDefault(); if (key.trim()) save.mutate(key.trim()); }}>
               <div className="flex-1">
-                <Field label={p?.connected ? "Replace the API key" : "Postman API key"} hint={<>Create one in Postman: your avatar → Settings → API keys. It's checked with Postman, then kept on this machine only.</>}>
+                <Field label={p?.connected ? "Replace the API key" : "Postman API key"} hint={<>Create one in Postman: your avatar → Settings → API keys. It's checked with Postman, then stored encrypted on this machine only.</>}>
                   <input className={`${inputClass} font-mono`} type="password" autoComplete="off" placeholder="PMAK-…" value={key} onChange={(e) => setKey(e.target.value)} />
                 </Field>
               </div>
@@ -45,6 +46,15 @@ export function SettingsPage() {
           </div>
         </Card>
         <EmailSettingsCard />
+        <Card title="Saved secrets">
+          <div className="space-y-2 p-4 text-sm text-ink-2">
+            <p className="flex items-start gap-2"><Icon name="lock" className="mt-0.5 shrink-0 text-good" /><span>Secret environment variables, the Postman API key and the email password are stored encrypted (AES-256-GCM). They're decrypted only when a run or an email needs them.</span></p>
+            {s?.key_source === "file" && <p>The encryption key is in <code className="break-all font-mono text-ink">{s.key_file}</code>. Back it up together with the database: a copy of the database without it can't be read, and if it's lost you'll need to enter your secrets again.</p>}
+            {s?.key_source === "env" && <p>The encryption key comes from the <code className="font-mono text-ink">QA_SECRET_KEY</code> environment variable. Keep it somewhere safe: without it, saved secrets can't be read.</p>}
+            {s?.key_source === "memory" && <p>This server uses a temporary key: secrets saved now are lost when it stops.</p>}
+            <p className="text-xs text-muted">This protects copies of the database (backups, a file shared by mistake). Anyone who can read every file on this computer can read the key too.</p>
+          </div>
+        </Card>
         <Card title="AI runs">
           <div className="space-y-2 p-4 text-sm text-ink-2">
             <p>AI runs use your Anthropic API key, read from the <code className="font-mono text-ink">ANTHROPIC_API_KEY</code> environment variable when the server starts. It isn't stored or shown here.</p>
