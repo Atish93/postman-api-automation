@@ -1,0 +1,24 @@
+
+[orchestrator -> load_published_collection] {"collection_uid":"12101599-18d4ef8a-32a0-42ac-a6ed-0f7b854d0252"}…
+
+[orchestrator -> rerun_collection] {}…
+[newman] 11 requests, 1/20 assertions failed
+
+[orchestrator -> run_status] {}…
+
+[orchestrator] Nothing needs diagnosis, and the only failure is an already-recorded known bug. Saving as the workflow requires.
+
+[orchestrator -> postman_update_collection] {}…
+
+[orchestrator] **Regression Demo - Booking Lifecycle (agent-built)** (`12101599-18d4ef8a-32a0-42ac-a6ed-0f7b854d0252`)
+
+The collection is in the same state as before this run. The only failure is a bug we had already recorded, so nothing needed fixing and nothing was published.
+
+- **Result before and after:** 1 of 20 checks failed across the 11 requests. Nothing was changed, so the result is the same before and after.
+- **Known bug still failing:** "KNOWN BUG - 05b Filter by checkin date (same day)". Filtering bookings by check-in date leaves out a booking that checks in on that day. It should have returned booking 3069 (check-in 2027-01-01), but it only returned bookings 16, 17 and 56. As instructed, I didn't investigate it again.
+- **New API bugs:** None.
+- **Healer changes:** None. No failures needed diagnosis, so I didn't call the debugger or the healer.
+- **Known bugs now passing:** None.
+- **Saved:** Nothing was written to Postman because the collection hadn't changed since it was downloaded. Nothing was added to the knowledge base either.
+
+[done] success, 5 turns, $0.084

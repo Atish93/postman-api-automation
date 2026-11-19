@@ -306,12 +306,33 @@ export const requestApproval = tool(
   },
 );
 
+// Splits the last run's failures: repeats of a recorded known bug need no investigation.
+// A failure counts as a repeat only if it is in a KNOWN BUG request AND it is the same
+// assertion recorded in that request's description when it was marked.
+function triage() {
+  const requests = requestsOf(state.collection?.item);
+  const isRepeat = (f: Failure) => {
+    if (!f.request.startsWith(KNOWN_BUG_PREFIX)) return false;
+    const desc = requests.find((r) => r.name === f.request)?.request?.description ?? "";
+    return desc.includes(`- ${f.assertion}:`);
+  };
+  const failures = state.lastRun?.failures ?? [];
+  const failing = new Set(failures.map((f) => f.request));
+  return {
+    known_bug_repeats: failures.filter(isRepeat),
+    needs_diagnosis: failures.filter((f) => !isRepeat(f)),
+    known_bugs_now_passing: requests.filter((r) => r.name.startsWith(KNOWN_BUG_PREFIX) && !failing.has(r.name)).map((r) => r.name),
+  };
+}
+
 export const runStatus = tool(
   "run_status",
-  "Summarise the working collection's state: last run's failures, diagnoses so far, changes made by the healer, and whether it can be published.",
+  "Summarise the working collection's state: the last run's failures split into known-bug repeats (no investigation needed) and failures that need diagnosis, known bugs that now pass, diagnoses so far, changes made by the healer, and whether it can be published.",
   {},
-  async () =>
-    text(JSON.stringify({ last_run: state.lastRun, diagnoses: state.diagnoses, heals: state.heals, changed_since_last_run: state.dirty, can_publish: canShip() ?? "yes" }, null, 2)),
+  async () => {
+    const { requests, assertions, failures } = state.lastRun ?? { requests: 0, assertions: 0, failures: [] };
+    return text(JSON.stringify({ last_run: { requests, assertions, failed: failures.length }, ...triage(), diagnoses: state.diagnoses, heals: state.heals, changed_since_last_run: state.dirty, can_publish: canShip() ?? "yes" }, null, 2));
+  },
 );
 
 export const markKnownBugs = tool(
