@@ -4,7 +4,12 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "check": "tsx tests/check-guards.ts",
+    "eval": "tsx eval/run-eval.ts",
+    "build-tests": "tsx orchestrator.ts",
+    "regression": "tsx orchestrator.ts --regression",
+    "drill": "tsx tests/outage-drill.ts",
+    "typecheck": "tsc"
   },
   "keywords": [],
   "author": "",

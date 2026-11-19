@@ -1,0 +1,65 @@
+Environment: Mock (http://127.0.0.1:45623)
+
+[orchestrator -> load_published_collection] {"collection_uid":"12101599-18d4ef8a-32a0-42ac-a6ed-0f7b854d0252"}…
+
+[orchestrator -> rerun_collection] {}…
+[newman] 11 requests, 10/12 assertions failed
+
+[orchestrator -> run_status] {}…
+
+[orchestrator] The circuit breaker has tripped. Asking the debugger for outage triage.
+
+[orchestrator -> debugger] {"subagent_type":"debugger","description":"Outage triage for booking collection","run_in_background":false,"prompt":"OUTAGE TRIAGE. Do not diagnose these as ind…
+
+[debugger -> send_request] {"method":"GET","url":"http://127.0.0.1:45623/ping"}…
+[probe] GET http://127.0.0.1:45623/ping -> 201
+
+[debugger -> send_request] {"method":"POST","url":"http://127.0.0.1:45623/auth","headers":{"Content-Type":"application/json"},"body":"{\"username\":\"admin\",\"password\":\"password123\"}…
+[probe] POST http://127.0.0.1:45623/auth -> 404
+
+[debugger -> get_run_details] {"request_name":"01 Health check"}…
+
+[debugger -> search_knowledge] {"query":"mock environment base URL route prefix health endpoint"}…
+[retrieved] "mock environment base URL route prefix health endpoint" -> GET /ping (HealthCheck) | Variables | PUT /booking/:id (UpdateBooking)
+
+[debugger -> send_request] {"method":"GET","url":"http://127.0.0.1:45623/booking"}…
+[probe] GET http://127.0.0.1:45623/booking -> 404
+
+[debugger -> send_request] {"method":"GET","url":"http://127.0.0.1:45623/booking/1"}…
+[probe] GET http://127.0.0.1:45623/booking/1 -> 404
+
+[debugger -> send_request] {"method":"GET","url":"http://127.0.0.1:45623/"}…
+[probe] GET http://127.0.0.1:45623/ -> 404
+
+[debugger -> get_request] {"request_name":"02 Login - valid credentials"}…
+
+[debugger -> get_run_details] {"request_name":"03 Login - invalid credentials"}…
+
+[debugger -> get_run_details] {"request_name":"10 Get deleted booking"}…
+
+[debugger -> send_request] {"method":"POST","url":"http://127.0.0.1:45623/api/auth","headers":{"Content-Type":"application/json"},"body":"{\"username\":\"admin\",\"password\":\"password12…
+[probe] POST http://127.0.0.1:45623/api/auth -> 404
+
+[orchestrator] **Circuit breaker tripped.** The collection was not healed, marked or saved, so the published version is unchanged.
+
+**Regression Demo - Booking Lifecycle (agent-built)** (`12101599-18d4ef8a-32a0-42ac-a6ed-0f7b854d0252`)
+
+- **Environment:** Mock (http://127.0.0.1:45623)
+- **Before:** fail. 3 of 11 requests passed and 10 of 12 assertions failed. 8 requests need diagnosis, and the breaker trips at 6.
+- **After:** not run. I stopped after the triage, as the rules require.
+- **Likely common cause:** the mock on port 45623 only answers the health check route. `GET /ping` works (it returns 201, and "01 Health check" passes). Every other route the debugger tried returned a plain-text 404 "Not Found" in 2–6 ms, including `/`, `/auth`, `/booking`, `/booking/1` and `/api/auth`. That looks like the mock was started without the booking API routes, or another server is using that port. It is not a problem in the tests, and the failures aren't knock-ons from login or create failing: `GET /booking` doesn't need a token and still gets 404 on its own. The empty booking ids in the 05, 07 and 09 URLs are only a side effect of create failing.
+- **What to check:**
+  1. Was the mock started with the full booking API routes, not just `/ping`? Its startup log should list which routes it registered.
+  2. Is an old or different process using port 45623?
+  3. Does the Mock environment point at the right mock and port?
+
+  Once `POST /auth` returns a token, re-run the collection.
+- **Known bugs still failing:** "KNOWN BUG - 05b Filter by checkin date (same day)". It is listed as failing the same way again, but it also got the same 404. So this run doesn't tell us anything about that bug.
+- **New API bugs:** none, because nothing was diagnosed.
+- **Healer changes:** none.
+- **Known bugs now passing:** none.
+- **Knowledge base:** nothing saved.
+
+[done] success, 5 turns, $0.169
+
+Orchestrator exit code: 3

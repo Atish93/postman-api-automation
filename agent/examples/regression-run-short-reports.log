@@ -1,0 +1,24 @@
+Environment: Test (https://restful-booker.herokuapp.com)
+
+[orchestrator -> load_published_collection] {"collection_uid":"12101599-18d4ef8a-32a0-42ac-a6ed-0f7b854d0252"}…
+
+[orchestrator -> rerun_collection] {}…
+[newman] 11 requests, 1/20 assertions failed
+
+[orchestrator -> run_status] {}…
+
+[orchestrator -> postman_update_collection] {}…
+
+[orchestrator] I re-checked "Regression Demo - Booking Lifecycle (agent-built)" (`12101599-18d4ef8a-32a0-42ac-a6ed-0f7b854d0252`). Nothing new failed and nothing needed repairing.
+
+- **Environment:** Test
+- **Before:** 10 of 11 requests passed; 1 of 20 assertions failed. The only failure is a bug that was already recorded.
+- **After:** unchanged, because nothing needed fixing.
+- **Known bug still failing:** `KNOWN BUG - 05b Filter by checkin date (same day)`. Its assertion "Booking checking in on that day is included" fails again in the same way. `GET /booking?checkin=2027-01-01` returns `[12, 1002]` and leaves out booking 1124, which checks in that day.
+- **New API bugs:** none.
+- **Healer changes:** none. Since no failures were new, the debugger and healer weren't needed.
+- **Known bugs now passing:** none.
+- **Saved to the knowledge base:** nothing.
+- **Publish:** the save step ran, but nothing had changed since the download, so nothing was saved. The published collection is the same as before.
+
+[done] success, 5 turns, $0.041
