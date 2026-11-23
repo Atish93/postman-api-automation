@@ -76,6 +76,9 @@ if (unhealthy) {
 }
 
 // ---- Run the team ----
+// Some tools wait for a person (approvals, the case review). The SDK ends any tool call after a minute by
+// default, which would cut a review short; give tool calls up to 24 hours (QA_TOOL_TIMEOUT_MS to change).
+process.env.MCP_TOOL_TIMEOUT = process.env.QA_TOOL_TIMEOUT_MS ?? String(24 * 3600 * 1000);
 const agents = buildAgents(mode);
 let exitCode = 0;
 try {

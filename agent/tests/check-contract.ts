@@ -193,6 +193,28 @@ await check("feedback: the analyst is asked again", () => {
   ok(/RESULT REJECTED\. Feedback from the human: please add a case for a negative id/.test(out), out);
 });
 
+await check("an abandoned question (its tool call timed out and the agent asked again) can't swallow the answer", () => {
+  const script = join(dir, "twice.mts");
+  writeFileSync(script, `
+    process.env.QA_CONFIG = ${JSON.stringify(join(dir, "qa.config.json"))};
+    const c = await import(${JSON.stringify(new URL("../contract.ts", import.meta.url).href)});
+    c.loadContract(${JSON.stringify(file)});
+    const t = await import(${JSON.stringify(new URL("../tools.ts", import.meta.url).href)});
+    const plan = ${JSON.stringify(JSON.stringify(plan))};
+    const first = t.requestCaseReview.handler({ plan_json: plan }, {});   // abandoned: nobody awaits it
+    await new Promise((r) => setTimeout(r, 50));
+    const second = await t.requestCaseReview.handler({ plan_json: plan }, {});
+    console.log("FIRST " + (await first).content[0].text.split("\\n")[0]);
+    console.log("SECOND " + second.content[0].text.split("\\n")[0]);
+    t.closeHuman();`);
+  // The answer arrives only after both questions were asked, as when someone takes their time.
+  const out = execFileSync("bash", ["-c", `(sleep 2; echo y) | npx tsx "${script}"`], { encoding: "utf8", cwd: fileURLToPath(new URL("..", import.meta.url)), env: { ...process.env, QA_NO_PROMPTS: "", QA_EVENTS: "1" } });
+  ok(/FIRST REJECTED: nobody answered/.test(out), out);
+  ok(/SECOND APPROVED\./.test(out), `the answer didn't reach the second question: ${out}`);
+  ok(/"type":"approval_answer","id":1,"answer":null,"superseded":true/.test(out), "the first question wasn't closed");
+  ok(/"type":"approval_answer","id":2,"answer":"y"/.test(out), "the second answer wasn't recorded");
+});
+
 await check("the contract team: an analyst; the debugger and healer read the contract, not the other API's knowledge base", async () => {
   const { buildAgents, allowedTools } = await import("../agents.ts");
   const a = buildAgents("contract");

@@ -76,33 +76,61 @@ async function postman(path: string, init: RequestInit = {}) {
 
 // Asks the person running the program. Returns null when nobody can answer
 // (no terminal input, as in CI, or QA_NO_PROMPTS=1 as in the model exam).
+//
+// One reader takes every line from stdin and gives it to the newest open question. If a question is
+// abandoned (its tool call timed out and the agent asked again), it is closed with no answer, so the
+// person's answer can never land on a question nobody is waiting for.
 let stdinReader: ReturnType<typeof createInterface> | null = null;
-let stdinLines: AsyncIterator<string> | null = null;
 let approvalSeq = 0;
+const SUPERSEDED = Symbol("superseded");
+let waiting: { id: number; resolve: (answer: string | null | typeof SUPERSEDED) => void } | null = null;
+const earlyLines: string[] = []; // lines typed before any question (ignored once a question takes them)
+
+function startReader() {
+  if (stdinReader) return;
+  stdinReader = createInterface({ input: process.stdin });
+  stdinReader.on("line", (line) => {
+    if (!waiting) return void earlyLines.push(line);
+    const w = waiting;
+    waiting = null;
+    w.resolve(line.trim());
+  });
+  stdinReader.on("close", () => {
+    const w = waiting;
+    waiting = null;
+    w?.resolve(null);
+  });
+}
+
 async function askHuman(question: string, details: Record<string, unknown> = {}): Promise<string | null> {
   const id = ++approvalSeq;
+  if (waiting) {
+    // The previous question was abandoned: close it, so it can't take the next answer.
+    const old = waiting;
+    waiting = null;
+    emit("approval_answer", { id: old.id, answer: null, superseded: true });
+    old.resolve(SUPERSEDED);
+  }
   emit("approval_request", { id, question, ...details });
   if (process.env.QA_NO_PROMPTS === "1") {
     console.log(`${question}(no answer: prompts are off)`);
     return null;
   }
-  if (!stdinReader) {
-    stdinReader = createInterface({ input: process.stdin });
-    stdinLines = stdinReader[Symbol.asyncIterator]();
-  }
+  startReader();
   // With events on, end the line so the next event starts on a line of its own.
   process.stdout.write(process.env.QA_EVENTS === "1" ? `${question}\n` : question);
-  const next = await stdinLines!.next();
-  const answer = next.done ? null : next.value.trim();
+  earlyLines.length = 0;
+  const answer = await new Promise<string | null | typeof SUPERSEDED>((resolve) => (waiting = { id, resolve }));
+  if (answer === SUPERSEDED) return null; // already recorded as superseded; the agent asked again
   emit("approval_answer", { id, answer });
   return answer;
 }
 
 // An open stdin reader keeps Node alive after the work is done, so close it when the run ends.
 export function closeHuman() {
-  stdinReader?.close();
+  const r = stdinReader;
   stdinReader = null;
-  stdinLines = null;
+  r?.close();
 }
 
 function requestsOf(items: any[] = []): any[] {

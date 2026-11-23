@@ -172,6 +172,14 @@ export function ContractPage() {
   const all = c.endpoints.map((e) => e.key);
   const isOn = (k: string) => (selected ? selected.has(k) : true);
   const toggle = (k: string) => setSelected((s) => { const n = new Set(s ?? all); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  // Select all / Deselect all act on the endpoints shown (all of them, or those matching the filter).
+  const visible = shown.map((e) => e.key);
+  const selectShown = (on: boolean) => setSelected((s) => {
+    const n = new Set(s ?? all);
+    for (const k of visible) on ? n.add(k) : n.delete(k);
+    return n.size === all.length ? null : n;
+  });
+  const allShownOn = visible.every(isOn), noneShownOn = !visible.some(isOn);
   const count = selected ? selected.size : all.length;
   const chosen = selected && selected.size < all.length ? [...selected] : undefined;
 
@@ -197,12 +205,17 @@ export function ContractPage() {
         <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-5">
           <div className="lg:col-span-3">
             {c.format === "document" ? <DocumentCard c={c} /> : (
-              <Card title={<span>Endpoints <span className="font-normal text-muted">· {count} of {all.length} chosen for testing</span></span>}
-                actions={<button className="text-xs text-accent hover:underline" onClick={() => setSelected(count === all.length ? new Set() : null)}>{count === all.length ? "Choose none" : "Choose all"}</button>}>
+              <Card title={<span>Endpoints <span className="font-normal text-muted">· {count} of {all.length} selected for testing</span></span>}
+                actions={<div className="flex gap-1">
+                  <Button size="sm" variant="ghost" icon="check" disabled={allShownOn} onClick={() => selectShown(true)}>{filter ? "Select shown" : "Select all"}</Button>
+                  <Button size="sm" variant="ghost" icon="x" disabled={noneShownOn} onClick={() => selectShown(false)}>{filter ? "Deselect shown" : "Deselect all"}</Button>
+                </div>}>
                 {all.length > 8 && <div className="px-4 pt-3"><input className={inputClass} aria-label="Filter endpoints" placeholder="Filter by path, summary or tag" value={filter} onChange={(e) => setFilter(e.target.value)} /></div>}
                 <ul className="divide-y divide-line">
                   {shown.map((e) => <EndpointRow key={e.key} e={e} on={isOn(e.key)} toggle={() => toggle(e.key)} />)}
+                  {shown.length === 0 && <li className="px-4 py-4 text-sm text-ink-2">No endpoint matches "{filter}".</li>}
                 </ul>
+                {count === 0 && <p className="border-t border-line px-4 py-3 text-sm text-ink-2">Select at least one endpoint to generate tests.</p>}
               </Card>
             )}
           </div>

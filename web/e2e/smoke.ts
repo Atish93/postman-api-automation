@@ -350,9 +350,17 @@ await check("Contracts: upload an OpenAPI file and see its endpoints", async () 
   await page.waitForURL(/\/contracts\/\d+$/);
   contractId = Number(page.url().split("/").pop());
   await page.getByRole("heading", { name: "Pet Store" }).waitFor();
-  await page.getByText("3 of 3 chosen for testing").waitFor();
-  await page.getByLabel("Test POST /pets").uncheck();
-  await page.getByText("2 of 3 chosen for testing").waitFor();
+  await page.getByText("3 of 3 selected for testing").waitFor();
+  await button("Deselect all").click();
+  await page.getByText("0 of 3 selected for testing").waitFor();
+  await page.getByText("Select at least one endpoint to generate tests.").waitFor();
+  if (!(await button("Generate tests").isDisabled())) throw new Error("Generate is enabled with nothing selected");
+  await button("Select all").click();
+  await page.getByText("3 of 3 selected for testing").waitFor();
+  await button("Deselect all").click();
+  await page.getByLabel("Test GET /pets", { exact: true }).check();
+  await page.getByLabel("Test GET /pets/{id}").check();
+  await page.getByText("2 of 3 selected for testing").waitFor();
 });
 
 await check("Contracts: generate tests for the chosen endpoints (a down server stops it before any AI cost)", async () => {
