@@ -43,7 +43,8 @@ Agents are defined in `agents.ts`, tools and every safety rule in `tools.ts` (co
 **Contract runs** (started from the dashboard's Contracts page) test any API against its contract:
 1. The Contract Analyst reads the contract and writes test cases.
 2. You review them: keep, edit, remove or add cases, or send them back with feedback. The edited cases are what gets built.
-3. The builder turns them into a collection. It must have exactly one request per approved case: the program refuses anything else. Response schemas from the contract are asserted in full with `pm.response.to.have.jsonSchema`.
+3. The builder turns them into a collection. It must have exactly one request per approved case: the program refuses anything else. Response schemas from the contract are asserted in full with `pm.response.to.have.jsonSchema` (OpenAPI-only formats such as `int64`, which Postman's validator rejects, are left out; the type is still checked).
+   - **Credentials** are set once, in the collection's auth, from variables with fixed names: `{{apiKey}}`, `{{accessToken}}`, `{{username}}`/`{{password}}`. If the API has a login or token endpoint, a collection-level script logs in when no token is stored, saves it to `{{accessToken}}` and every request uses it. The program refuses literal credentials in requests, except in security cases that send a deliberately wrong one.
 4. The debugger and self-healer work as usual, with the contract as their documentation. A response that contradicts the contract is an API bug (a "contract violation") and is marked `KNOWN BUG`. The knowledge base isn't used, since it's about another API.
 5. Nothing is published by the agents: the dashboard asks which workspace, and a new collection or a folder in an existing one, and publishes only after you confirm.
 

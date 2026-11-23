@@ -180,7 +180,8 @@ export function ContractOutcome({ run }: { run: Run }) {
           </div>
         </Card>
       )}
-      {publishing && <PublishDialog run={run} defaultName={c.plan?.collection_name ?? `${c.name} Contract Tests`} contractName={c.name} requests={countRequests(built?.item)} onClose={() => setPublishing(false)} />}
+      {publishing && <PublishDialog run={run} defaultName={c.plan?.collection_name ?? `${c.name} Contract Tests`} contractName={c.name} requests={countRequests(built?.item)}
+        testBaseUrl={(result as any)?.environment?.base_url ?? ""} onClose={() => setPublishing(false)} />}
     </>
   );
 }
@@ -188,7 +189,7 @@ export function ContractOutcome({ run }: { run: Run }) {
 const countRequests = (items: any[] = []): number => items.reduce((n, i) => n + (Array.isArray(i.item) ? countRequests(i.item) : 1), 0);
 
 // The second approval: which workspace, and a new collection or a folder in an existing one.
-function PublishDialog({ run, defaultName, contractName, requests, onClose }: { run: Run; defaultName: string; contractName: string; requests: number; onClose: () => void }) {
+function PublishDialog({ run, defaultName, contractName, requests, testBaseUrl, onClose }: { run: Run; defaultName: string; contractName: string; requests: number; testBaseUrl: string; onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const workspaces = useQuery({ queryKey: ["workspaces"], queryFn: api.workspaces });
@@ -199,6 +200,15 @@ function PublishDialog({ run, defaultName, contractName, requests, onClose }: { 
   const [folder, setFolder] = useState(`${contractName} contract tests`);
   const [replace, setReplace] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  // A new collection is a new project: its environments, each with a base URL.
+  const [envRows, setEnvRows] = useState([{ label: "Test", base_url: testBaseUrl }, { label: "Stg", base_url: "" }, { label: "Prod", base_url: "" }]);
+  const [toDashboard, setToDashboard] = useState(true);
+  const contract = useQuery({ queryKey: ["contracts", run.contract?.id], queryFn: () => api.contract(run.contract!.id!), enabled: !!run.contract?.id });
+  const credVars = contract.data?.auth?.variables ?? [];
+  const filled = envRows.filter((e) => e.base_url.trim());
+  const badUrl = filled.some((e) => !/^https?:\/\/\S+$/.test(e.base_url.trim()));
+  const dupLabel = new Set(filled.map((e) => e.label.trim().toLowerCase())).size !== filled.length || filled.some((e) => !e.label.trim());
+  const setRow = (i: number, patch: Partial<{ label: string; base_url: string }>) => setEnvRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const chosenWs = ws || workspaces.data?.[0]?.id || "";
   const wsName = workspaces.data?.find((w) => w.id === chosenWs)?.name ?? "";
   const collections = useQuery({ queryKey: ["workspace-collections", chosenWs], queryFn: () => api.workspaceCollections(chosenWs), enabled: !!chosenWs });
@@ -207,13 +217,14 @@ function PublishDialog({ run, defaultName, contractName, requests, onClose }: { 
   const folders = useQuery({ queryKey: ["collection-folders", chosenCol], queryFn: () => api.collectionFolders(chosenCol), enabled: mode === "folder" && !!chosenCol });
   const nameTaken = mode === "new" && !!collections.data?.some((c) => c.name === name.trim());
   const folderTaken = mode === "folder" && !!folders.data?.some((f) => f.name === folder.trim());
-  const ready = !!chosenWs && (mode === "new" ? !!name.trim() && !nameTaken : !!chosenCol && !!folder.trim() && (!folderTaken || replace));
+  const ready = !!chosenWs && (mode === "new" ? !!name.trim() && !nameTaken && !badUrl && !dupLabel : !!chosenCol && !!folder.trim() && (!folderTaken || replace));
 
   const publish = useMutation({
-    mutationFn: () => api.publishRun(run.id, chosenWs, mode === "new" ? { kind: "new", name: name.trim() } : { kind: "folder", collection_uid: chosenCol, folder_name: folder.trim(), replace }),
+    mutationFn: () => api.publishRun(run.id, chosenWs, mode === "new" ? { kind: "new", name: name.trim() } : { kind: "folder", collection_uid: chosenCol, folder_name: folder.trim(), replace },
+      mode === "new" ? filled.map((e) => ({ label: e.label.trim(), base_url: e.base_url.trim() })) : [], mode === "new" && toDashboard),
     onSuccess: (r) => {
-      toast("ok", `Added ${r.requests} requests to ${r.workspace.name} → ${r.folder ? `${r.collection.name} → ${r.folder}` : r.collection.name}`);
-      for (const k of [["run-publications", run.id], ["runs", run.id], ["contracts"], ["collections"], ["workspace-collections"]]) qc.invalidateQueries({ queryKey: k });
+      toast("ok", `Added ${r.requests} requests to ${r.workspace.name} → ${r.folder ? `${r.collection.name} → ${r.folder}` : r.collection.name}${r.environments.length ? `, with ${r.environments.length} environment${r.environments.length === 1 ? "" : "s"}` : ""}`);
+      for (const k of [["run-publications", run.id], ["runs", run.id], ["contracts"], ["collections"], ["workspace-collections"], ["environments"]]) qc.invalidateQueries({ queryKey: k });
       onClose();
     },
     onError: () => setConfirming(false),
@@ -232,6 +243,13 @@ function PublishDialog({ run, defaultName, contractName, requests, onClose }: { 
       {workspaces.isPending ? <div className="py-6 text-center text-muted"><Spinner /></div> : workspaces.error ? <ErrorNote error={workspaces.error} /> : confirming ? (
         <div className="space-y-3 text-sm">
           <p>Add <strong>{requests} requests</strong> to the workspace <strong>{wsName}</strong>, as {where}?</p>
+          {mode === "new" && filled.length > 0 && (
+            <div>
+              <p>And create {filled.length === 1 ? "this environment" : "these environments"} in the workspace{toDashboard ? " and in the dashboard" : ""}:</p>
+              <ul className="mt-1 space-y-0.5">{filled.map((e) => <li key={e.label}><strong>{name.trim()} - {e.label}</strong>: <span className="break-all font-mono text-xs">{e.base_url.trim()}</span></li>)}</ul>
+              {credVars.length > 0 && <p className="mt-1 text-xs text-ink-2">Each also gets {credVars.map((v) => `{{${v.key}}}`).join(", ")}, empty: enter the values in Postman{toDashboard ? " and the dashboard" : ""}.</p>}
+            </div>
+          )}
           {mode === "folder" && folderTaken && <p className="flex gap-2 text-warn-ink"><Icon name="alert" className="mt-0.5 shrink-0" />The folder's current requests will be replaced.</p>}
           <p className="text-ink-2">It's also added to the dashboard's Collections, so you can run, schedule and email it.</p>
           <ErrorNote error={publish.error} />
@@ -250,11 +268,26 @@ function PublishDialog({ run, defaultName, contractName, requests, onClose }: { 
               </label>
             ))}
           </fieldset>
-          {mode === "new" ? (
+          {mode === "new" ? (<>
             <Field label="Collection name" error={nameTaken ? "This workspace already has a collection with that name." : undefined}>
               <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
             </Field>
-          ) : collections.data?.length === 0 ? <p className="text-sm text-ink-2">This workspace has no collections yet: add the tests as a new collection.</p> : (
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">Environments for this project</legend>
+              <p className="text-xs text-ink-2">The base URL for each place the API runs, including any path like /api/v3. Leave a row empty to skip it. Each environment gets <span className="font-mono">{"{{baseUrl}}"}</span>{credVars.length ? <> and the credential variables {credVars.map((v) => <span key={v.key} className="font-mono">{`{{${v.key}}}`} </span>)}(empty, to fill in)</> : null}.</p>
+              {envRows.map((r, i) => (
+                <div key={i} className="grid grid-cols-[6rem_1fr_auto] gap-2">
+                  <input className={inputClass} aria-label={`Environment ${i + 1} name`} value={r.label} onChange={(e) => setRow(i, { label: e.target.value })} />
+                  <input className={`${inputClass} font-mono`} aria-label={`${r.label || `Environment ${i + 1}`} base URL`} value={r.base_url} onChange={(e) => setRow(i, { base_url: e.target.value })} placeholder={`https://${(r.label || "env").toLowerCase()}.api.example.com/v1`} />
+                  <Button size="sm" variant="ghost" icon="trash" aria-label={`Remove ${r.label || "row"}`} onClick={() => setEnvRows((rs) => rs.filter((_, j) => j !== i))} />
+                </div>
+              ))}
+              {envRows.length < 6 && <Button size="sm" icon="plus" onClick={() => setEnvRows((rs) => [...rs, { label: "", base_url: "" }])}>Add an environment</Button>}
+              {badUrl && <p className="text-xs text-bad-ink">Base URLs start with http:// or https://.</p>}
+              {dupLabel && <p className="text-xs text-bad-ink">Give each environment its own name.</p>}
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="accent-[var(--accent)]" checked={toDashboard} onChange={(e) => setToDashboard(e.target.checked)} />Also add them to the dashboard's Environments</label>
+            </fieldset>
+          </>) : collections.data?.length === 0 ? <p className="text-sm text-ink-2">This workspace has no collections yet: add the tests as a new collection.</p> : (
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Collection">
                 <select className={inputClass} value={chosenCol} onChange={(e) => setColUid(e.target.value)}>{collections.data?.map((c) => <option key={c.uid} value={c.uid}>{c.name}</option>)}</select>

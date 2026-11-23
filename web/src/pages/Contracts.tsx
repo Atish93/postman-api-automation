@@ -1,10 +1,10 @@
 // API contracts: a separate feature. Add a contract (OpenAPI/Swagger, a link, a Postman spec, or a
 // PDF/Word/Markdown document); the Contract Analyst agent writes test cases for you to review; the team
 // builds and checks a collection; you choose the Postman workspace and collection it goes to.
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router";
-import { api, type ContractDetail, type Endpoint } from "../api.ts";
+import { api, type ContractCheck, type ContractDetail, type Endpoint, type Environment } from "../api.ts";
 import { dateTime, money, relativeTime } from "../format.ts";
 import { GroupCheckbox } from "../ContractRun.tsx";
 import { Button, Card, EmptyState, ErrorNote, Field, Icon, MethodBadge, Modal, PageHeader, Spinner, StatusBadge, inputClass, useToast } from "../ui.tsx";
@@ -354,33 +354,160 @@ function GenerateDialog({ c, open, onClose, endpoints, count }: { c: ContractDet
   const envs = useQuery({ queryKey: ["environments"], queryFn: api.environments, enabled: open });
   const [envId, setEnvId] = useState<number | null>(null);
   const [focus, setFocus] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [anyway, setAnyway] = useState(false);
   const chosenEnv = envId ?? envs.data?.[0]?.id ?? null;
   const env = envs.data?.find((e) => e.id === chosenEnv);
+  const isSpec = c.format === "openapi";
+  const check = useQuery({
+    queryKey: ["contract-check", c.id, chosenEnv, env?.updated_at, endpoints?.join(",")],
+    queryFn: () => api.contractCheck(c.id, chosenEnv!, endpoints),
+    enabled: open && isSpec && !!chosenEnv && !creating, retry: false,
+  });
+  const verdict = check.data?.probe?.verdict;
+  const blocked = isSpec && (verdict === "not_found" || verdict === "unreachable") && !anyway;
   const start = useMutation({
     mutationFn: () => api.startRun({ kind: "ai", ai_mode: "contract", contract_id: c.id, environment_id: chosenEnv!, ...(endpoints && { endpoints }), ...(focus.trim() && { request: focus.trim() }) }),
     onSuccess: (run) => { qc.invalidateQueries({ queryKey: ["runs"] }); qc.invalidateQueries({ queryKey: ["contracts"] }); onClose(); navigate(`/runs/${run.id}`); },
   });
+  useEffect(() => setAnyway(false), [chosenEnv]);
+
   return (
-    <Modal open={open} onClose={onClose} title={`Generate tests for "${c.name}"`}
-      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" icon="sparkle" busy={start.isPending} disabled={!chosenEnv} onClick={() => start.mutate()}>Start</Button></>}>
+    <Modal open={open} onClose={onClose} title={`Generate tests for "${c.name}"`} wide
+      footer={creating ? null : <><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" icon="sparkle" busy={start.isPending} disabled={!chosenEnv || blocked} onClick={() => start.mutate()}>Start</Button></>}>
       <div className="space-y-4">
         <ol className="space-y-1.5 text-sm text-ink-2">
-          <li><strong className="text-ink">1. Analyse.</strong> The Contract Analyst reads {c.format === "openapi" ? `${count === c.endpoints.length ? "every endpoint" : `the ${count} chosen endpoint${count === 1 ? "" : "s"}`}` : "the document"} and writes test cases, each tied to what the contract says.</li>
+          <li><strong className="text-ink">1. Analyse.</strong> The Contract Analyst reads {isSpec ? `${count === c.endpoints.length ? "every endpoint" : `the ${count} selected endpoint${count === 1 ? "" : "s"}`}` : "the document"} and writes test cases, each tied to what the contract says.</li>
           <li><strong className="text-ink">2. You review them.</strong> Keep, edit, remove or add cases, or send them back with feedback. Nothing is built before you approve.</li>
-          <li><strong className="text-ink">3. Build and check.</strong> The builder writes a Postman collection and runs it on the environment; the debugger and self-healer fix test mistakes, and contract violations are marked as known bugs.</li>
+          <li><strong className="text-ink">3. Build and check.</strong> The collection logs in once (if the API has a login) and shares the credentials with every request; it runs on the environment, test mistakes are fixed, and contract violations are marked as known bugs.</li>
           <li><strong className="text-ink">4. You choose where it goes.</strong> Nothing reaches Postman until you pick the workspace and collection and confirm.</li>
         </ol>
-        {envs.data?.length === 0 ? <p className="text-sm">Create an <Link to="/environments/new" className="text-accent hover:underline" onClick={onClose}>environment</Link> for this API first.</p> : (
-          <Field label="Environment to check the tests on" hint={env ? <>Requests go to <span className="font-mono">{env.base_url}</span>; credentials come from its variables.{c.servers[0] && !c.servers.some((s) => s.startsWith(env.base_url.replace(/\/$/, ""))) ? <> The contract names <span className="break-all font-mono">{c.servers[0]}</span>.</> : null}</> : undefined}>
-            <select className={inputClass} value={chosenEnv ?? ""} onChange={(e) => setEnvId(Number(e.target.value))}>{envs.data?.map((e) => <option key={e.id} value={e.id}>{e.label} ({e.base_url})</option>)}</select>
-          </Field>
+        {creating ? (
+          <NewEnvironmentForm c={c} suggested={check.data?.suggested_base_url ?? c.servers.find((s) => /^https?:/.test(s)) ?? ""}
+            onCancel={() => setCreating(false)} onCreated={(id) => { setEnvId(id); setCreating(false); }} />
+        ) : envs.data?.length === 0 ? (
+          <div className="text-sm">No environments yet. <button className="text-accent hover:underline" onClick={() => setCreating(true)}>Create one for this API</button>.</div>
+        ) : (
+          <>
+            <Field label="Environment to check the tests on">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <select className={inputClass} value={chosenEnv ?? ""} onChange={(e) => setEnvId(Number(e.target.value))}>{envs.data?.map((e) => <option key={e.id} value={e.id}>{e.label} ({e.base_url})</option>)}</select>
+                <Button icon="plus" onClick={() => setCreating(true)}>New for this API</Button>
+              </div>
+            </Field>
+            {isSpec && env && <PreRunCheck c={c} env={env} check={check} anyway={anyway} setAnyway={setAnyway} />}
+          </>
         )}
-        <Field label="Anything to focus on? (optional)" hint="e.g. 'Mostly error handling', 'Skip the admin endpoints', 'Use the sandbox card numbers from section 4'.">
-          <textarea className={inputClass} rows={2} value={focus} onChange={(e) => setFocus(e.target.value)} />
-        </Field>
-        <p className="text-xs text-muted">An AI run: usually well under a dollar for a small API; the cost is shown on the run.</p>
-        <ErrorNote error={start.error} />
+        {!creating && <>
+          <Field label="Anything to focus on? (optional)" hint="e.g. 'Mostly error handling', 'Skip the admin endpoints', 'Use the sandbox card numbers from section 4'.">
+            <textarea className={inputClass} rows={2} value={focus} onChange={(e) => setFocus(e.target.value)} />
+          </Field>
+          <p className="text-xs text-muted">An AI run: usually well under a dollar for a small API; the cost is shown on the run.</p>
+          <ErrorNote error={start.error} />
+        </>}
       </div>
     </Modal>
+  );
+}
+
+// "Before you start": is this environment the API the contract describes, and are its credentials set?
+function PreRunCheck({ c, env, check, anyway, setAnyway }: { c: ContractDetail; env: Environment; check: ReturnType<typeof useQuery<ContractCheck>>; anyway: boolean; setAnyway: (v: boolean) => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [values, setValues] = useState<Record<string, string>>({});
+  const save = useMutation({
+    mutationFn: (patch: { base_url?: string; vars?: Record<string, string> }) => {
+      const kept = env.variables.map((v) => ({ key: v.key, value: v.secret ? (patch.vars?.[v.key] ?? null) : (patch.vars?.[v.key] ?? v.value), secret: v.secret }));
+      const added = Object.entries(patch.vars ?? {}).filter(([k]) => !env.variables.some((v) => v.key === k))
+        .map(([key, value]) => ({ key, value, secret: !!check.data?.credentials.find((x) => x.key === key)?.secret }));
+      return api.updateEnvironment(env.id, { name: env.name, label: env.label, base_url: patch.base_url ?? env.base_url, health_path: env.health_path, variables: [...kept, ...added] });
+    },
+    onSuccess: (e) => { toast("ok", `Saved to ${e.label}`); setValues({}); qc.invalidateQueries({ queryKey: ["environments"] }); },
+    onError: (e) => toast("error", e.message),
+  });
+  if (check.isPending) return <div className="flex items-center gap-2 text-sm text-muted"><Spinner size={14} />Checking the environment against the contract…</div>;
+  if (check.error) return <ErrorNote error={check.error} />;
+  const d = check.data!;
+  const p = d.probe;
+  const bad = p && (p.verdict === "not_found" || p.verdict === "unreachable");
+  const line = (ok: boolean | null, children: React.ReactNode) => (
+    <li className="flex gap-2"><Icon name={ok === null ? "alert" : ok ? "check" : "x"} className={`mt-0.5 shrink-0 ${ok === null ? "text-warn-ink" : ok ? "text-good" : "text-bad-ink"}`} /><span className="min-w-0">{children}</span></li>
+  );
+  const missing = d.credentials.filter((v) => !v.present && !v.auto);
+  return (
+    <div className="space-y-3 rounded-lg bg-page p-3 text-sm ring-1 ring-line">
+      <div className="text-xs font-medium text-muted">Before you start</div>
+      <ul className="space-y-2">
+        {p && line(p.verdict === "ok" || p.verdict === "needs_auth" ? true : p.verdict === "server_error" ? null : false, <>
+          <span className="font-mono text-xs">{p.endpoint}</span> {p.status ? <>answered <strong>{p.status}</strong></> : <>got no answer ({p.error})</>} at <span className="break-all font-mono text-xs">{p.url}</span>.{" "}
+          {p.verdict === "ok" ? "The API is there." : p.verdict === "needs_auth" ? "The API is there; it wants credentials." : p.verdict === "server_error" ? "The server answered with an error; the run may stop on server issues." :
+            p.verdict === "not_found" ? <strong>The contract's endpoint isn't at this base URL, so every test would fail.</strong> : <strong>Nothing answered at this address.</strong>}
+        </>)}
+        {d.base_url_matches === false && d.suggested_base_url && line(bad ? false : null, <>
+          The contract says the API is at <span className="break-all font-mono text-xs">{d.suggested_base_url}</span>; {env.label} uses <span className="break-all font-mono text-xs">{env.base_url}</span>.{" "}
+          <button className="text-accent hover:underline" disabled={save.isPending} onClick={() => save.mutate({ base_url: d.suggested_base_url! })}>Use the contract's base URL in {env.label}</button>
+        </>)}
+        {d.credentials.map((v) => line(v.auto ? true : v.present, <>
+          <span className="font-mono text-xs">{`{{${v.key}}}`}</span> <span className="text-ink-2">{v.purpose}</span>{" "}
+          {v.auto ? <span className="text-xs text-muted">(no need to set it)</span> : v.present ? <span className="text-xs text-good-ink">set in {env.label}</span> : <span className="text-xs text-bad-ink">not set in {env.label}</span>}
+        </>))}
+        {d.login && line(true, <>The tests log in once with <span className="font-mono text-xs">{d.login.endpoint}</span> ({d.login.why}) and share the token with every request.</>)}
+        {!d.credentials.length && line(true, "The contract doesn't ask for credentials.")}
+      </ul>
+      {missing.length > 0 && (
+        <form className="space-y-2 border-t border-line pt-3" onSubmit={(e) => { e.preventDefault(); save.mutate({ vars: Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim())) }); }}>
+          <div className="text-xs text-ink-2">Add the missing values to {env.label} (secrets are stored encrypted). For the demo Petstore, any api_key such as <span className="font-mono">special-key</span> works.</div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {missing.map((v) => (
+              <input key={v.key} className={`${inputClass} font-mono`} aria-label={`Value for ${v.key}`} placeholder={v.key} type={v.secret ? "password" : "text"} autoComplete="off"
+                value={values[v.key] ?? ""} onChange={(e) => setValues((x) => ({ ...x, [v.key]: e.target.value }))} />
+            ))}
+          </div>
+          <Button type="submit" size="sm" busy={save.isPending} disabled={!Object.values(values).some((v) => v.trim())}>Save to {env.label}</Button>
+        </form>
+      )}
+      {bad && (
+        <label className="flex items-start gap-2 border-t border-line pt-3 text-xs text-ink-2">
+          <input type="checkbox" className="mt-0.5 accent-[var(--accent)]" checked={anyway} onChange={(e) => setAnyway(e.target.checked)} />
+          Start anyway (for example, if this endpoint is turned off on purpose)
+        </label>
+      )}
+    </div>
+  );
+}
+
+// A new environment for this API, prefilled from the contract: base URL and the credentials it needs.
+function NewEnvironmentForm({ c, suggested, onCancel, onCreated }: { c: ContractDetail; suggested: string; onCancel: () => void; onCreated: (id: number) => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const vars = (c.auth?.variables ?? []).filter((v) => !v.auto);
+  const [label, setLabel] = useState(`${c.title.replace(/swagger\s*/i, "").split(/[-–(]/)[0].trim().slice(0, 30) || "API"} Test`);
+  const [baseUrl, setBaseUrl] = useState(suggested);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const create = useMutation({
+    mutationFn: () => {
+      const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "api";
+      return api.createEnvironment({ name: /^[a-z0-9]/.test(slug) ? slug : `e${slug}`, label: label.trim(), base_url: baseUrl.trim().replace(/\/+$/, ""), health_path: "/",
+        variables: vars.map((v) => ({ key: v.key, value: values[v.key] ?? "", secret: v.secret })) });
+    },
+    onSuccess: (e) => { toast("ok", `Created ${e.label}`); qc.invalidateQueries({ queryKey: ["environments"] }); onCreated(e.id); },
+  });
+  return (
+    <form className="space-y-3 rounded-lg bg-page p-3 ring-1 ring-line" onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
+      <div className="text-sm font-medium">New environment for {c.name}</div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Name"><input className={inputClass} required value={label} onChange={(e) => setLabel(e.target.value)} /></Field>
+        <Field label="Base URL" hint={suggested ? "From the contract's servers" : "Where the API lives, including any path prefix like /api/v3"}>
+          <input className={`${inputClass} font-mono`} required type="url" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
+        </Field>
+        {vars.map((v) => (
+          <Field key={v.key} label={v.key} hint={v.purpose}>
+            <input className={`${inputClass} font-mono`} type={v.secret ? "password" : "text"} autoComplete="off" value={values[v.key] ?? ""} onChange={(e) => setValues((x) => ({ ...x, [v.key]: e.target.value }))} placeholder="optional now, needed for the tests" />
+          </Field>
+        ))}
+      </div>
+      <ErrorNote error={create.error} />
+      <div className="flex gap-2"><Button type="submit" variant="primary" busy={create.isPending}>Create and use it</Button><Button type="button" variant="ghost" onClick={onCancel}>Back</Button></div>
+    </form>
   );
 }

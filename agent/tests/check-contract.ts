@@ -16,9 +16,13 @@ const check = async (name: string, fn: () => unknown) => {
 const ok = (cond: unknown, msg: string) => { if (!cond) throw new Error(msg); };
 
 // A fake API: GET /pets/1 answers a pet; GET /pets/2 answers one that breaks the contract.
+let logins = 0;
 const server = createServer((req, res) => {
   if (req.url === "/health") return res.writeHead(200).end("ok");
-  const pet = req.url === "/pets/2" ? { id: "two", name: null } : { id: 1, name: "Rex", tag: null, children: [{ id: 3, name: "Pup" }] };
+  // The login-once checks: /login hands out a token; /secure needs it.
+  if (req.url === "/login") { logins++; return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ access_token: "tok-123" })); }
+  if (req.url?.startsWith("/secure")) return res.writeHead(req.headers.authorization === "Bearer tok-123" ? 200 : 401).end("{}");
+  const pet = req.url === "/pets/2" ? { id: "two", name: null } : { id: 1, born: "2026-01-02T03:04:05Z", name: "Rex", tag: null, children: [{ id: 3, name: "Pup" }] };
   res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(pet));
 });
 await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -33,7 +37,7 @@ const spec = {
     schemas: {
       Pet: {
         type: "object", required: ["id", "name"], example: { id: 1, name: "Rex" },
-        properties: { id: { type: "integer" }, name: { type: "string" }, tag: { type: "string", nullable: true }, children: { type: "array", items: { $ref: "#/components/schemas/Pet" } } },
+        properties: { id: { type: "integer", format: "int64" }, born: { type: "string", format: "date-time" }, name: { type: "string" }, tag: { type: "string", nullable: true }, children: { type: "array", items: { $ref: "#/components/schemas/Pet" } } },
       },
     },
   },
@@ -100,6 +104,43 @@ await check("Newman enforces the schema: a conforming response passes, a contrac
     envVar: [{ key: "baseUrl", value: base }], reporters: [] }, (e: any, s: any) => (e ? rej(e) : res(s))));
   const results = summary.run.executions.map((x: any) => (x.assertions ?? []).every((a: any) => !a.error));
   ok(JSON.stringify(results) === "[true,false]", `expected pass then fail, got ${JSON.stringify(results)}`);
+});
+
+await check("schema formats: OpenAPI-only ones (int64, int32, float, double, byte, binary, password) are dropped; standard ones kept", () => {
+  const s = c.toJsonSchema({ type: "object", properties: { a: { type: "integer", format: "int64" }, b: { type: "number", format: "double" }, c: { type: "string", format: "password" }, d: { type: "string", format: "date-time" }, e: { type: "string", format: "uuid" }, f: { type: "string", format: "phone" } } });
+  ok(JSON.stringify(Object.values(s.properties).map((p: any) => p.format ?? null)) === '[null,null,null,"date-time","uuid",null]', JSON.stringify(s.properties));
+});
+
+const runNewman = (collection: any, envVar: any[] = []) => new Promise<any>((res, rej) => newman.run({ collection, envVar, reporters: [] }, (e: any, x: any) => (e ? rej(e) : res(x))));
+
+await check("login once: the collection's script logs in a single time and every request shares the token, even when the environment has an empty accessToken", async () => {
+  const { LOGIN_ONCE_SCRIPT } = await import("../agents.ts");
+  const script = LOGIN_ONCE_SCRIPT.replace('"{{baseUrl}}/auth/login"', '"{{baseUrl}}/login"');
+  const req = (name: string, extra: any = {}) => ({ name, request: { method: "GET", url: "{{baseUrl}}/secure", ...extra },
+    event: [{ listen: "test", script: { exec: ['pm.test("status", () => pm.expect(pm.response.code).to.eql(' + (name.includes("No credentials") ? 401 : 200) + "));"] } }] });
+  const collection = {
+    info: { name: "auth", schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+    auth: { type: "bearer", bearer: [{ key: "token", value: "{{accessToken}}", type: "string" }] },
+    event: [{ listen: "prerequest", script: { exec: script.split("\n") } }],
+    item: [req("TC02 First secured request"), req("TC03 Second secured request"), req("TC07 No credentials", { auth: { type: "noauth" } }), req("TC04 Third secured request")],
+  };
+  logins = 0;
+  const s = await runNewman(collection, [{ key: "baseUrl", value: base }, { key: "username", value: "u" }, { key: "password", value: "p" }, { key: "accessToken", value: "" }]);
+  const byName = new Map<string, boolean>(s.run.executions.map((x: any) => [x.item.name, (x.assertions ?? []).length > 0 && x.assertions.every((a: any) => !a.error)]));
+  ok(byName.size === 4 && [...byName.values()].every(Boolean), `results ${JSON.stringify([...byName])}`);
+  ok(logins === 1, `logged in ${logins} times`);
+});
+
+await check("credentials must come from variables: literals refused except in security cases", () => {
+  const p = c.parsePlan(JSON.stringify({ collection_name: "x", cases: [
+    { id: "TC01", type: "positive", title: "a", expected: "200" }, { id: "TC02", type: "security", title: "bad token", expected: "401" }, { id: "TC03", type: "positive", title: "b", expected: "200" }] }));
+  const col = (auth: any, items: any[]) => ({ auth, item: items });
+  const r = (name: string, header: any[] = [], auth?: any) => ({ name, request: { method: "GET", url: "{{baseUrl}}/x", header, ...(auth && { auth }) } });
+  const good = col({ type: "bearer", bearer: [{ key: "token", value: "{{accessToken}}" }] }, [r("TC01 a"), r("TC02 bad token", [{ key: "Authorization", value: "Bearer wrong" }]), r("TC03 b", [{ key: "api_key", value: "{{apiKey}}" }])]);
+  ok(c.literalCredentials(p, good).length === 0, JSON.stringify(c.literalCredentials(p, good)));
+  const bad = col({ type: "bearer", bearer: [{ key: "token", value: "eyJhbGciOi.real" }] }, [r("TC01 a", [{ key: "api_key", value: "special-key" }]), r("TC03 b", [], { type: "apikey", apikey: [{ key: "value", value: "abc" }, { key: "key", value: "api_key" }] })]);
+  const found = c.literalCredentials(p, bad);
+  ok(found.join(" | ") === "the collection's auth | TC01 a (header api_key) | TC03 b (auth)", found.join(" | "));
 });
 
 await check("documents: search finds passages and read pages through the text", async () => {

@@ -375,9 +375,14 @@ await check("Contracts: upload an OpenAPI file and see its endpoints", async () 
 await check("Contracts: generate tests for the chosen endpoints (a down server stops it before any AI cost)", async () => {
   api.state.mode = "down";
   await button("Generate tests").click();
-  await page.getByRole("dialog").getByText("You review them").waitFor();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByText("You review them").waitFor();
+  // The pre-run check calls a real endpoint: the test API has no /pets, so it warns and holds the start.
+  await dialog.getByText("The contract's endpoint isn't at this base URL, so every test would fail.").waitFor();
+  if (!(await dialog.getByRole("button", { name: "Start" }).isDisabled())) throw new Error("Start is enabled although the base URL looks wrong");
+  await dialog.getByLabel(/Start anyway/).check();
   await page.getByLabel("Anything to focus on? (optional)").fill("Mostly errors");
-  await page.getByRole("dialog").getByRole("button", { name: "Start" }).click();
+  await dialog.getByRole("button", { name: "Start" }).click();
   await page.waitForURL(/\/runs\/\d+$/);
   await page.getByText("AI contract").first().waitFor();
   await page.getByRole("link", { name: "Pet Store" }).waitFor();
@@ -458,6 +463,27 @@ await check("Add to Postman: choose the workspace, then a folder in an existing 
   const folder = pm.store.get("1-abc").item.find((i: any) => i.name === "Pets contract");
   if (folder?.item?.length !== 3) throw new Error("the folder isn't in the collection");
   await page.getByText(/Added 3 requests to Practice → folder Pets contract in collection Fake API tests/).waitFor();
+});
+
+await check("Add to Postman as a new project: asks each environment's base URL and creates the environments", async () => {
+  const before = (await (await page.request.get(`${base}/api/environments`)).json()).length;
+  await page.goto(`${base}/runs/${finished}`);
+  await button("Add it somewhere else too").click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("radio", { name: /A new collection/ }).check();
+  await dialog.getByLabel("Collection name").fill("Pets project");
+  await dialog.getByLabel("Test base URL").fill("https://test.pets.example.com/v1");
+  await dialog.getByLabel("Stg base URL").fill("ftp://nope");
+  await dialog.getByText("Base URLs start with http:// or https://.").waitFor();
+  await dialog.getByLabel("Stg base URL").fill("https://stg.pets.example.com/v1");
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await dialog.getByText("Pets project - Stg").waitFor();
+  await dialog.getByRole("button", { name: "Yes, add them" }).click();
+  await page.getByText(/Added 3 requests to Practice → Pets project, with 2 environments/).waitFor();
+  const made = pm.environments.filter((e: any) => e.name.startsWith("Pets project - "));
+  if (made.length !== 2 || made[1].values[0].value !== "https://stg.pets.example.com/v1") throw new Error(`environments: ${JSON.stringify(made)}`);
+  const after = (await (await page.request.get(`${base}/api/environments`)).json()).length;
+  if (after !== before + 2) throw new Error(`dashboard environments ${before} → ${after}`);
 });
 
 await check("Contract page: lists its runs and where its tests are in Postman", async () => {

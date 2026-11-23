@@ -13,6 +13,7 @@ import { loadEnvironment } from "./environment.ts";
 import { importFromPostman } from "../collections.ts";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { authOf, resolveServers } from "../contracts.ts";
 
 type Emit = (type: string, data: Record<string, unknown>) => void;
 export type AiHandle = { done: Promise<RunOutcome>; answer: (text: string) => boolean; cancel: () => boolean };
@@ -37,7 +38,8 @@ export function runAi(db: DB, run: RunRow, emit: Emit): AiHandle {
     const spec = c.format === "openapi" ? (specOf(c)) : null;
     writeFileSync(file, JSON.stringify({
       name: c.name, title: c.title, api_version: c.api_version, format: c.format, spec_version: c.spec_version,
-      servers: JSON.parse(c.servers), endpoints: JSON.parse(c.endpoints),
+      servers: resolveServers(JSON.parse(c.servers), c.source_kind === "url" ? c.source_ref : null), endpoints: JSON.parse(c.endpoints),
+      auth: spec ? authOf(spec) : null, base_url: env.baseUrl,
       selected: run.contract_endpoints ? JSON.parse(run.contract_endpoints) : null,
       focus: run.request ?? null,
       spec, text: c.format === "document" ? c.text : null,

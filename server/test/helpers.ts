@@ -55,6 +55,7 @@ export function fixtureCollection(opts: { failItems?: boolean; itemsName?: strin
 export async function fakePostman() {
   const collection = { ...fixtureCollection(), info: { ...fixtureCollection().info, name: "Fake API tests (from Postman)" } };
   const store = new Map<string, any>([["1-abc", collection]]);
+  const environments: any[] = []; // environments created in the workspace
   const spec = { content: "openapi: 3.0.0\ninfo: { title: Spec Hub API, version: '1' }\npaths:\n  /ping:\n    get:\n      responses: { '201': { description: up } }\n" };
   let made = 0;
   const server = createServer(async (req, res) => {
@@ -78,12 +79,17 @@ export async function fakePostman() {
       if (req.method === "PUT") { store.set(m[1], JSON.parse(body).collection); return json({ collection: { uid: m[1] } }); }
       return json({ collection: store.get(m[1]) });
     }
+    if (url.pathname === "/environments" && req.method === "POST" && url.searchParams.get("workspace") === "ws1") {
+      const e = JSON.parse(body).environment;
+      environments.push(e);
+      return json({ environment: { id: `env${environments.length}`, uid: `1-env${environments.length}`, name: e.name } });
+    }
     if (url.pathname === "/specs" && url.searchParams.get("workspaceId") === "ws1") return json({ specs: [{ id: "spec1", name: "Spec Hub API", type: "OPENAPI:3.0" }], meta: { nextCursor: null } });
     if (url.pathname === "/specs/spec1/files") return json({ files: [{ id: "f1", path: "index.yaml", type: "ROOT" }] });
     if (url.pathname === "/specs/spec1/files/index.yaml") return json({ id: "f1", path: "index.yaml", content: spec.content });
     res.writeHead(404).end("{}");
   });
-  return { url: await listen(server), store, spec, close: () => { server.closeAllConnections(); server.close(); } };
+  return { url: await listen(server), store, spec, environments, close: () => { server.closeAllConnections(); server.close(); } };
 }
 
 // A fresh app with an in-memory database, pointed at the fake Postman.

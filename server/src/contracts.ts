@@ -197,3 +197,65 @@ export function endpointChanges(before: Endpoint[], after: Endpoint[]) {
     changed,
   };
 }
+
+// ---- Where the API lives, and how it authenticates ----
+
+// A spec's servers can be relative ("/api/v3"): resolve them against the URL the spec came from.
+export function resolveServers(servers: string[], sourceUrl: string | null): string[] {
+  return servers.map((s) => {
+    if (/^https?:\/\//i.test(s) || !sourceUrl) return s;
+    try { return new URL(s, sourceUrl).toString().replace(/\/$/, ""); } catch { return s; }
+  });
+}
+
+export type AuthVariable = { key: string; secret: boolean; purpose: string; auto?: boolean };
+export type ContractAuth = { variables: AuthVariable[]; schemes: { name: string; type: string; detail: string }[]; login: { endpoint: string; why: string } | null };
+
+const LOGIN_PATH = /\/(log-?in|sign-?in|auth(enticate)?|token|oauth\/token|sessions?)$/i;
+
+// The environment variables the tests read, from the spec's security schemes and any login endpoint.
+// Names are fixed by convention so the agents, the dashboard and Postman environments agree:
+// apiKey, accessToken, username, password.
+export function authOf(spec: any): ContractAuth | null {
+  if (!spec || typeof spec !== "object") return null;
+  const schemes = spec.components?.securitySchemes ?? spec.securityDefinitions ?? {};
+  const vars = new Map<string, AuthVariable>();
+  const add = (v: AuthVariable) => { if (!vars.has(v.key)) vars.set(v.key, v); };
+  const out: ContractAuth["schemes"] = [];
+  let login: ContractAuth["login"] = null;
+  let apiKeys = 0;
+  for (const [name, raw] of Object.entries<any>(schemes)) {
+    const s = raw?.$ref ? undefined : raw;
+    if (!s) continue;
+    const type = String(s.type ?? "");
+    if (type === "apiKey") {
+      const key = apiKeys++ ? `apiKey_${name.replace(/\W+/g, "_")}` : "apiKey";
+      const where = s.in === "header" ? "header" : s.in === "cookie" ? "cookie" : "query parameter";
+      add({ key, secret: true, purpose: `API key for "${name}", sent in the ${where} "${s.name}"` });
+      out.push({ name, type: "apiKey", detail: `${s.in} "${s.name}"` });
+    } else if ((type === "http" && /^basic$/i.test(s.scheme)) || type === "basic") {
+      add({ key: "username", secret: false, purpose: `User name for "${name}" (HTTP basic)` });
+      add({ key: "password", secret: true, purpose: `Password for "${name}" (HTTP basic)` });
+      out.push({ name, type: "basic", detail: "HTTP basic" });
+    } else if (type === "http" || type === "oauth2" || type === "openIdConnect") {
+      // OAuth2's password flow is a login endpoint: the tests can fetch the token themselves.
+      const tokenUrl = s.flows?.password?.tokenUrl ?? (s.flow === "password" ? s.tokenUrl : null);
+      if (tokenUrl && !login) login = { endpoint: `POST ${tokenUrl}`, why: `the OAuth2 password flow of "${name}"` };
+      add({ key: "accessToken", secret: true, purpose: `Access token for "${name}" (${type === "http" ? `HTTP ${s.scheme}` : type})` });
+      const flows = s.flows ? Object.keys(s.flows).join(", ") : s.flow ?? "";
+      out.push({ name, type, detail: type === "http" ? `HTTP ${s.scheme}` : `${type}${flows ? ` (${flows})` : ""}` });
+    }
+  }
+  // An unsecured POST to a login-like path is the login endpoint.
+  if (!login) {
+    for (const [path, item] of Object.entries<any>(spec.paths ?? {})) {
+      if (item?.post && LOGIN_PATH.test(path)) { login = { endpoint: `POST ${path}`, why: "its path looks like a login" }; break; }
+    }
+  }
+  if (login) {
+    add({ key: "username", secret: false, purpose: `User name for logging in (${login.endpoint})` });
+    add({ key: "password", secret: true, purpose: `Password for logging in (${login.endpoint})` });
+    vars.set("accessToken", { key: "accessToken", secret: true, auto: true, purpose: `Filled in by the tests: they log in with ${login.endpoint} once and share the token` });
+  }
+  return { variables: [...vars.values()], schemes: out, login };
+}

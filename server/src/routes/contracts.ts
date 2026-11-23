@@ -5,12 +5,28 @@ import { z } from "zod";
 import { now, type DB } from "../db.ts";
 import { HttpError } from "../errors.ts";
 import { postman } from "../postman.ts";
-import { endpointChanges, MAX_FILE_BYTES, parseContract, type Endpoint, type ParsedContract } from "../contracts.ts";
+import { authOf, endpointChanges, MAX_FILE_BYTES, parseContract, resolveServers, type Endpoint, type ParsedContract } from "../contracts.ts";
+import { parse as parseYaml } from "yaml";
+import { loadEnvironment, networkReason } from "../runs/environment.ts";
+import { encrypt } from "../secrets.ts";
 import { importFromPostman } from "../collections.ts";
 import { countRequests } from "./postman.ts";
 import { audit } from "../audit.ts";
 
 const json = (s: string | null) => (s ? JSON.parse(s) : null);
+
+// The stored spec as an object (OpenAPI contracts), cached by content.
+const specCache = new Map<string, any>();
+export function specOf(c: any): any | null {
+  if (c.format !== "openapi") return null;
+  if (!specCache.has(c.hash)) {
+    const t = Buffer.from(c.original).toString("utf8").replace(/^\uFEFF/, "").trim();
+    specCache.set(c.hash, t.startsWith("{") ? JSON.parse(t) : parseYaml(t, { maxAliasCount: 100 }));
+  }
+  return specCache.get(c.hash);
+}
+export const serversOf = (c: any) => resolveServers(JSON.parse(c.servers), c.source_kind === "url" ? c.source_ref : null);
+const norm = (u: string) => u.trim().replace(/\/+$/, "").toLowerCase();
 
 export function contractRoutes(app: FastifyInstance, db: DB) {
   const get = (id: number) => {
@@ -30,7 +46,8 @@ export function contractRoutes(app: FastifyInstance, db: DB) {
   };
   const detail = (c: any) => ({
     ...summary(c),
-    servers: JSON.parse(c.servers),
+    servers: serversOf(c),
+    auth: authOf(specOf(c)),
     endpoints: JSON.parse(c.endpoints) as Endpoint[],
     warnings: JSON.parse(c.warnings),
     last_changes: json(c.last_changes),
@@ -173,7 +190,17 @@ export function contractRoutes(app: FastifyInstance, db: DB) {
     const run = db.prepare("SELECT * FROM runs WHERE id = ?").get(Number(req.params.id)) as any;
     if (!run) throw new HttpError(404, "Run not found.");
     if (run.ai_mode !== "contract") throw new HttpError(400, "Only contract runs are published from here.");
-    const b = z.object({ workspace_id: z.string().min(1), target: Target }).parse(req.body);
+    const b = z.object({
+      workspace_id: z.string().min(1), target: Target,
+      // A new collection is a new project: its environments (e.g. Test, Stg, Prod) with their base URLs.
+      environments: z.array(z.object({
+        label: z.string().trim().min(1).max(40),
+        base_url: z.string().trim().url().refine((u) => /^https?:\/\//.test(u), "Must start with http:// or https://"),
+      })).max(6).default([]),
+      add_to_dashboard: z.boolean().default(false),
+    }).parse(req.body);
+    const labels = b.environments.map((e) => e.label.toLowerCase());
+    if (new Set(labels).size !== labels.length) throw new HttpError(400, "Each environment needs its own name.");
     const result = json(run.result_json);
     const built = result?.contract?.collection;
     if (!built?.item?.length) throw new HttpError(400, "This run didn't build a collection to publish.");
@@ -212,6 +239,30 @@ export function contractRoutes(app: FastifyInstance, db: DB) {
       folder = t.folder_name;
     }
 
+    // The project's environments: in the Postman workspace, and in the dashboard if asked. Each has the base URL
+    // and the credential variables the tests read (empty: secrets are entered by people, in Postman or here).
+    const contract = run.contract_id ? db.prepare("SELECT * FROM contracts WHERE id = ?").get(run.contract_id) as any : null;
+    const authVars = (contract ? authOf(specOf(contract))?.variables : null) ?? [];
+    const madeEnvs: { label: string; postman_uid: string | null; dashboard_id: number | null }[] = [];
+    for (const e of b.environments) {
+      const values = [{ key: "baseUrl", value: e.base_url.replace(/\/+$/, ""), type: "default", enabled: true },
+        ...authVars.map((v) => ({ key: v.key, value: "", type: v.secret ? "secret" : "default", enabled: true }))];
+      const made = await postman(db, `/environments?workspace=${encodeURIComponent(ws.id)}`, { method: "POST", body: { environment: { name: `${collectionName} - ${e.label}`, values } } });
+      let dashboardId: number | null = null;
+      if (b.add_to_dashboard) {
+        const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+        let name = `${slug(collectionName).slice(0, 20)}-${slug(e.label)}`.replace(/^-+/, "").slice(0, 32) || "env";
+        if (!/^[a-z0-9]/.test(name)) name = `e${name}`;
+        for (let i = 2; db.prepare("SELECT 1 FROM environments WHERE name = ?").get(name); i++) name = `${name.replace(/-\d+$/, "").slice(0, 29)}-${i}`;
+        const t = now();
+        dashboardId = Number(db.prepare("INSERT INTO environments (name, label, base_url, health_path, created_at, updated_at) VALUES (?, ?, ?, '/', ?, ?)")
+          .run(name, `${collectionName.slice(0, 40)} ${e.label}`.slice(0, 50), e.base_url.replace(/\/+$/, ""), t, t).lastInsertRowid);
+        const ins = db.prepare("INSERT INTO variables (environment_id, key, value, secret) VALUES (?, ?, ?, ?)");
+        for (const v of authVars) ins.run(dashboardId, v.key, v.secret ? encrypt("") : "", v.secret ? 1 : 0);
+      }
+      madeEnvs.push({ label: e.label, postman_uid: made.environment?.uid ?? made.environment?.id ?? null, dashboard_id: dashboardId });
+    }
+
     // Bring it into the dashboard too, so it can be run, scheduled and reported on.
     let collectionId: number | null = null;
     try {
@@ -221,9 +272,61 @@ export function contractRoutes(app: FastifyInstance, db: DB) {
     db.prepare(`INSERT INTO contract_publications (contract_id, run_id, workspace_id, workspace_name, collection_uid, collection_name, folder_name, requests, published_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(run.contract_id, run.id, ws.id, ws.name, uid, collectionName, folder, requests, now());
     audit(db, { actor: "admin", ip: req.ip, action: "contract.publish",
-      summary: `Published ${requests} contract tests from run #${run.id} to workspace "${ws.name}": ${folder ? `folder "${folder}" in collection "${collectionName}"${b.target.kind === "folder" && b.target.replace ? " (replaced)" : ""}` : `new collection "${collectionName}"`}`,
+      summary: `Published ${requests} contract tests from run #${run.id} to workspace "${ws.name}": ${folder ? `folder "${folder}" in collection "${collectionName}"${b.target.kind === "folder" && b.target.replace ? " (replaced)" : ""}` : `new collection "${collectionName}"`}${madeEnvs.length ? `, with environments ${madeEnvs.map((e) => e.label).join(", ")}${b.add_to_dashboard ? " (also in the dashboard)" : ""}` : ""}`,
       details: { run_id: run.id, contract_id: run.contract_id, collection_uid: uid } });
-    return { workspace: { id: ws.id, name: ws.name }, collection: { uid, name: collectionName, id: collectionId }, folder, requests };
+    return { workspace: { id: ws.id, name: ws.name }, collection: { uid, name: collectionName, id: collectionId }, folder, requests, environments: madeEnvs, credential_variables: authVars };
+  });
+
+  // Before a run: is the environment the API this contract describes, and are its credentials there?
+  // Calls one real endpoint, so a wrong base URL shows now instead of as 22 failed requests.
+  app.get<{ Params: { id: string }; Querystring: { environment_id?: string; endpoints?: string } }>("/api/contracts/:id/check", async (req) => {
+    const c = get(Number(req.params.id));
+    if (!db.prepare("SELECT 1 FROM environments WHERE id = ?").get(Number(req.query.environment_id))) throw new HttpError(404, "Environment not found.");
+    const env = loadEnvironment(db, Number(req.query.environment_id));
+    const servers = serversOf(c);
+    const base = env.baseUrl.replace(/\/+$/, "");
+    const concrete = servers.filter((s) => /^https?:\/\//i.test(s) && !s.includes("{"));
+    const auth = authOf(specOf(c));
+    const credentials = (auth?.variables ?? []).map((v) => ({ ...v, present: !!env.variables[v.key]?.trim() }));
+
+    let probe: any = null;
+    const spec = specOf(c);
+    if (spec) {
+      const chosen = new Set(String(req.query.endpoints ?? "").split(",").filter(Boolean));
+      const eps: Endpoint[] = JSON.parse(c.endpoints);
+      const gets = eps.filter((e) => e.method === "GET" && !e.path.includes("{"));
+      const pick = gets.find((e) => chosen.has(e.key) && !e.secured) ?? gets.find((e) => chosen.has(e.key)) ?? gets.find((e) => !e.secured) ?? gets[0];
+      if (pick) {
+        // Fill required query parameters with a value the contract allows (first enum value, default or example).
+        const op = spec.paths?.[pick.path]?.get ?? {};
+        const params = [...(spec.paths?.[pick.path]?.parameters ?? []), ...(op.parameters ?? [])].filter((p: any) => p?.in === "query" && p.required);
+        const q = new URLSearchParams();
+        for (const p of params) {
+          const s = p.schema ?? p;
+          const v = s.enum?.[0] ?? s.default ?? p.example ?? s.example ?? (s.type === "integer" || s.type === "number" ? 1 : "x");
+          q.set(p.name, Array.isArray(v) ? String(v[0]) : String(v));
+        }
+        const url = `${base}${pick.path}${q.size ? `?${q}` : ""}`;
+        const headers: Record<string, string> = { accept: "application/json" };
+        const key = (auth?.schemes ?? []).find((s) => s.type === "apiKey" && s.detail.startsWith("header"));
+        if (key && env.variables.apiKey) headers[key.detail.match(/"(.+)"/)![1]] = env.variables.apiKey;
+        if (env.variables.accessToken) headers.authorization = `Bearer ${env.variables.accessToken}`;
+        try {
+          const res = await fetch(url, { headers, signal: AbortSignal.timeout(10_000), redirect: "manual" });
+          const s = res.status;
+          const verdict = s === 404 || s === 405 ? "not_found" : s >= 500 ? "server_error" : s === 401 || s === 403 ? "needs_auth" : "ok";
+          probe = { endpoint: pick.key, url, status: s, verdict };
+        } catch (e: any) {
+          probe = { endpoint: pick.key, url, error: networkReason(e), verdict: "unreachable" };
+        }
+      }
+    }
+    return {
+      base_url: env.baseUrl, servers,
+      base_url_matches: concrete.length ? concrete.some((s) => norm(s) === norm(base)) : null,
+      suggested_base_url: concrete[0] ?? null,
+      credentials, login: auth?.login ?? null, probe,
+    };
   });
 
   app.get<{ Params: { id: string } }>("/api/runs/:id/publications", async (req) =>

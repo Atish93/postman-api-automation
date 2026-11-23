@@ -74,8 +74,15 @@ export type ContractSummary = {
 };
 export type Publication = { id: number; contract_id: number | null; run_id: number | null; workspace_id: string; workspace_name: string | null; collection_uid: string; collection_name: string; folder_name: string | null; requests: number; published_at: string };
 export type ContractChanges = { added: string[]; removed: string[]; changed: { key: string; what: string[] }[]; text_changed?: boolean; from_version?: string | null; to_version?: string | null; at?: string };
+export type AuthVariable = { key: string; secret: boolean; purpose: string; auto?: boolean };
+export type ContractAuth = { variables: AuthVariable[]; schemes: { name: string; type: string; detail: string }[]; login: { endpoint: string; why: string } | null };
+export type ContractCheck = {
+  base_url: string; servers: string[]; base_url_matches: boolean | null; suggested_base_url: string | null;
+  credentials: (AuthVariable & { present: boolean })[]; login: ContractAuth["login"];
+  probe: { endpoint: string; url: string; status?: number; error?: string; verdict: "ok" | "needs_auth" | "not_found" | "server_error" | "unreachable" } | null;
+};
 export type ContractDetail = ContractSummary & {
-  servers: string[]; endpoints: Endpoint[]; warnings: string[]; last_changes: ContractChanges | null;
+  servers: string[]; auth: ContractAuth | null; endpoints: Endpoint[]; warnings: string[]; last_changes: ContractChanges | null;
   text_preview: string | null; text_length: number | null;
   runs: { id: number; status: RunStatus; environment_label: string; cost_usd: number | null; created_at: string; finished_at: string | null }[];
   published: Publication[];
@@ -233,8 +240,11 @@ export const api = {
   contractSourceUrl: (id: number) => `/api/contracts/${id}/source`,
   postmanSpecs: (workspaceId: string) => request<PostmanSpec[]>("GET", `/postman/workspaces/${encodeURIComponent(workspaceId)}/specs`),
   collectionFolders: (uid: string) => request<{ name: string; requests: number }[]>("GET", `/postman/collections/${encodeURIComponent(uid)}/folders`),
-  publishRun: (runId: number, workspace_id: string, target: PublishTarget) =>
-    request<{ workspace: { id: string; name: string }; collection: { uid: string; name: string; id: number | null }; folder: string | null; requests: number }>("POST", `/runs/${runId}/publish`, { workspace_id, target }),
+  contractCheck: (id: number, environmentId: number, endpoints?: string[]) =>
+    request<ContractCheck>("GET", `/contracts/${id}/check?environment_id=${environmentId}${endpoints?.length ? `&endpoints=${encodeURIComponent(endpoints.join(","))}` : ""}`),
+  publishRun: (runId: number, workspace_id: string, target: PublishTarget, environments: { label: string; base_url: string }[] = [], add_to_dashboard = false) =>
+    request<{ workspace: { id: string; name: string }; collection: { uid: string; name: string; id: number | null }; folder: string | null; requests: number;
+      environments: { label: string; postman_uid: string | null; dashboard_id: number | null }[]; credential_variables: AuthVariable[] }>("POST", `/runs/${runId}/publish`, { workspace_id, target, environments, add_to_dashboard }),
   runPublications: (runId: number) => request<Publication[]>("GET", `/runs/${runId}/publications`),
 
   dashboard: (days = 30) => request<Dashboard>("GET", `/dashboard?days=${days}`),

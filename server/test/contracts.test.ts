@@ -49,6 +49,18 @@ paths:
       responses: { '200': { description: ok }, '404': { description: not found } }
 `;
 
+const PETSTORE_V3 = {
+  openapi: "3.0.4", info: { title: "Swagger Petstore - OpenAPI 3.0", version: "1.0.27" }, servers: [{ url: "/api/v3" }],
+  components: { securitySchemes: {
+    petstore_auth: { type: "oauth2", flows: { implicit: { authorizationUrl: "https://petstore3.swagger.io/oauth/authorize", scopes: {} } } },
+    api_key: { type: "apiKey", name: "api_key", in: "header" },
+  } },
+  paths: {
+    "/pet/findByStatus": { get: { security: [{ petstore_auth: [] }], parameters: [{ name: "status", in: "query", required: true, schema: { type: "string", default: "available", enum: ["available", "pending", "sold"] } }], responses: { "200": { description: "ok" }, "400": { description: "bad" } } } },
+    "/store/inventory": { get: { security: [{ api_key: [] }], responses: { "200": { description: "ok" } } } },
+  },
+};
+
 // The spec the URL serves; tests change it to check refresh.
 let served = { openapi: "3.0.0", info: { title: "Orders", version: "1" }, paths: {
   "/orders": { get: { responses: { "200": { description: "ok" } } }, post: { responses: { "201": { description: "made" } } } },
@@ -86,7 +98,15 @@ async function docx(paragraphs: string[]) {
 before(async () => {
   api = await fakeApi();
   pm = await fakePostman();
-  specServer = createServer((req, res) => req.url === "/openapi.json" ? res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(served)) : res.writeHead(404).end());
+  // Also a Petstore-like API: its spec says servers: [{ url: "/api/v3" }] (relative), and it lives under /api/v3.
+  specServer = createServer((req, res) => {
+    const u = new URL(req.url!, "http://x");
+    if (u.pathname === "/openapi.json") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(served));
+    if (u.pathname === "/api/v3/openapi.json") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(PETSTORE_V3));
+    if (u.pathname === "/api/v3/pet/findByStatus") return res.writeHead(u.searchParams.get("status") === "available" ? 200 : 400, { "content-type": "application/json" }).end("[]");
+    if (u.pathname === "/api/v3/store/inventory") return res.writeHead(req.headers.api_key === "special-key" ? 200 : 401).end("{}");
+    res.writeHead(404).end();
+  });
   await new Promise<void>((r) => specServer.listen(0, "127.0.0.1", r));
   specUrl = `http://127.0.0.1:${specServer.address().port}/openapi.json`;
   ({ app, db } = await testApp(pm.url));
@@ -176,6 +196,48 @@ test("list, rename, download the original, and every addition is in the audit lo
   assert.ok(log.includes("Added contract \"Pet Store\" (OpenAPI 3.0.3, 3 endpoints) from pets.yaml"), log.join("\n"));
 });
 
+// ---- Where the API lives, and its credentials ----
+
+let v3Id: number;
+test("a relative server (\"/api/v3\") is resolved against the spec's URL; credentials come from the security schemes", async () => {
+  const r = await call("POST", "/api/contracts/url", { url: specUrl.replace("/openapi.json", "/api/v3/openapi.json") });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  v3Id = r.body.id;
+  assert.deepEqual(r.body.servers, [specUrl.replace("/openapi.json", "/api/v3")]);
+  assert.deepEqual(r.body.auth.variables.map((v: any) => [v.key, v.secret]), [["accessToken", true], ["apiKey", true]]);
+  assert.match(r.body.auth.variables[1].purpose, /header "api_key"/);
+  assert.equal(r.body.auth.login, null);
+});
+
+test("credentials: a login endpoint or OAuth2 password flow means username/password, and the token is fetched by the tests", async () => {
+  const { authOf } = await import("../src/contracts.ts");
+  const login = authOf({ paths: { "/auth/login": { post: {} }, "/orders": { get: {} } }, components: { securitySchemes: { bearer: { type: "http", scheme: "bearer" } } } })!;
+  assert.deepEqual(login.login, { endpoint: "POST /auth/login", why: "its path looks like a login" });
+  assert.deepEqual(login.variables.map((v) => [v.key, !!v.auto]), [["accessToken", true], ["username", false], ["password", false]]);
+  const oauth = authOf({ swagger: "2.0", paths: {}, securityDefinitions: { o: { type: "oauth2", flow: "password", tokenUrl: "https://id.example.com/token" } } })!;
+  assert.equal(oauth.login?.endpoint, "POST https://id.example.com/token");
+  const basic = authOf({ paths: {}, components: { securitySchemes: { b: { type: "http", scheme: "basic" } } } })!;
+  assert.deepEqual(basic.variables.map((v) => v.key), ["username", "password"]);
+  assert.deepEqual(authOf({ paths: {} })!.variables, []);
+});
+
+test("pre-run check: a base URL without /api/v3 is caught by calling a real endpoint; the right one passes; missing credentials are listed", async () => {
+  const root = specUrl.replace("/openapi.json", "");
+  const wrong = (await call("POST", "/api/environments", { name: "pet-wrong", label: "Pet wrong", base_url: root, health_path: "/" })).body.id;
+  const right = (await call("POST", "/api/environments", { name: "pet-right", label: "Pet right", base_url: `${root}/api/v3/`, health_path: "/",
+    variables: [{ key: "apiKey", value: "special-key", secret: true }] })).body.id;
+  const bad = (await call("GET", `/api/contracts/${v3Id}/check?environment_id=${wrong}`)).body;
+  assert.equal(bad.base_url_matches, false);
+  assert.equal(bad.suggested_base_url, `${root}/api/v3`);
+  assert.equal(bad.probe.verdict, "not_found");
+  assert.equal(bad.probe.url, `${root}/pet/findByStatus?status=available`, "a required enum parameter gets an allowed value");
+  const good = (await call("GET", `/api/contracts/${v3Id}/check?environment_id=${right}&endpoints=${encodeURIComponent("GET /store/inventory")}`)).body;
+  assert.equal(good.base_url_matches, true, "a trailing slash doesn't matter");
+  assert.deepEqual([good.probe.endpoint, good.probe.status, good.probe.verdict], ["GET /store/inventory", 200, "ok"], "the env's apiKey is sent in the contract's header");
+  assert.deepEqual(good.credentials.map((v: any) => [v.key, v.present]), [["accessToken", false], ["apiKey", true]]);
+  assert.equal((await call("GET", `/api/contracts/${v3Id}/check?environment_id=99999`)).status, 404);
+});
+
 // ---- Contract runs ----
 
 let envId: number;
@@ -195,6 +257,7 @@ test("a contract run hands the agents the contract (spec, chosen endpoints, focu
   assert.ok(existsSync(file));
   const c = JSON.parse(readFileSync(file, "utf8"));
   assert.deepEqual([c.name, c.format, c.selected, c.focus, c.spec.info.title], ["Pets v1", "openapi", ["GET /pets/{id}"], "Focus on errors", "Pet Store"]);
+  assert.deepEqual([c.base_url, c.auth.variables.map((v: any) => v.key)], [api.url, ["apiKey"]], "the agents get the base URL and the credential variables");
   const events = (await call("GET", `/api/runs/${run.id}/events/history`)).body;
   assert.equal(events.find((e: any) => e.type === "run_started")?.data.mode, "contract");
 });
@@ -228,6 +291,25 @@ test("publish as a new collection in the chosen workspace; it's also added to th
   const c = (await call("GET", `/api/contracts/${petsId}`)).body;
   assert.equal(c.published[0].collection_name, "Pets contract tests");
   assert.ok(db.prepare("SELECT summary FROM audit_log WHERE action = 'contract.publish'").all().some((r: any) => /to workspace "Practice": new collection "Pets contract tests"/.test(r.summary)));
+});
+
+test("a new project gets its environments: in the Postman workspace and, if asked, in the dashboard, with the credential variables empty", async () => {
+  const id = finishedRun("passed");
+  const r = await call("POST", `/api/runs/${id}/publish`, { workspace_id: "ws1", target: { kind: "new", name: "Pets project" }, add_to_dashboard: true,
+    environments: [{ label: "Test", base_url: "https://test.pets.example.com/v1/" }, { label: "Stg", base_url: "https://stg.pets.example.com/v1" }] });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(pm.environments.map((e: any) => e.name), ["Pets project - Test", "Pets project - Stg"]);
+  assert.deepEqual(pm.environments[0].values, [
+    { key: "baseUrl", value: "https://test.pets.example.com/v1", type: "default", enabled: true },
+    { key: "apiKey", value: "", type: "secret", enabled: true },
+  ]);
+  assert.deepEqual(r.body.environments.map((e: any) => [e.label, !!e.postman_uid, !!e.dashboard_id]), [["Test", true, true], ["Stg", true, true]]);
+  const dash = (await call("GET", `/api/environments/${r.body.environments[1].dashboard_id}`)).body;
+  assert.deepEqual([dash.label, dash.base_url, dash.variables.map((v: any) => [v.key, v.secret])], ["Pets project Stg", "https://stg.pets.example.com/v1", [["apiKey", true]]]);
+  assert.ok(db.prepare("SELECT summary FROM audit_log WHERE action = 'contract.publish'").all().some((x: any) => /with environments Test, Stg \(also in the dashboard\)/.test(x.summary)));
+  const dup = await call("POST", `/api/runs/${id}/publish`, { workspace_id: "ws1", target: { kind: "new", name: "Pets project 2" }, environments: [{ label: "Test", base_url: "https://a.example.com" }, { label: "test", base_url: "https://b.example.com" }] });
+  assert.match(dup.body.error, /own name/);
+  assert.equal((await call("POST", `/api/runs/${id}/publish`, { workspace_id: "ws1", target: { kind: "new", name: "X" }, environments: [{ label: "Test", base_url: "not a url" }] })).status, 400);
 });
 
 test("publish as a folder of an existing collection: variables merged; a taken folder name needs 'replace'", async () => {

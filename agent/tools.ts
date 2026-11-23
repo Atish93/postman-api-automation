@@ -12,7 +12,7 @@
 //   - nothing is published unless every remaining failure is a marked KNOWN BUG
 import { tool, createSdkMcpServer, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import { contractTools, coverage, currentContract, parsePlan, type PlanT } from "./contract.ts";
+import { contractTools, coverage, currentContract, literalCredentials, parsePlan, type PlanT } from "./contract.ts";
 import newman from "newman";
 import { appendFileSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -404,6 +404,9 @@ export const runCollection = tool(
       const { missing, extra } = coverage(state.contractPlan, parsed);
       if (missing.length || extra.length)
         return text(`Refused: the collection must have exactly one request per approved case, named after its id (e.g. "TC03 ...").${missing.length ? ` Missing: ${missing.join(", ")}.` : ""}${extra.length ? ` Not in the approved cases: ${extra.join(" | ")}.` : ""}`, true);
+      const literals = literalCredentials(state.contractPlan, parsed);
+      if (literals.length)
+        return text(`Refused: credentials must come from variables (e.g. {{accessToken}}, {{apiKey}}), set once in the collection's auth. Literal credentials found in: ${literals.join("; ")}. Only security cases may send a deliberately wrong value.`, true);
     }
     state.collection = parsed;
     state.source = null;

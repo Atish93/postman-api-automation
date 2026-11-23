@@ -10,6 +10,10 @@ type Contract = {
   name: string; title: string; api_version: string | null; format: "openapi" | "document"; spec_version: string | null;
   servers: string[]; endpoints: { key: string; method: string; path: string; summary: string | null; responses: string[]; secured: boolean }[];
   selected: string[] | null; focus: string | null; spec: any | null; text: string | null;
+  // How to authenticate, worked out by the dashboard from the spec (null for documents):
+  // the environment variables the tests read, and the login endpoint if there is one.
+  auth?: { variables: { key: string; secret: boolean; purpose: string }[]; schemes: unknown[]; login: { endpoint: string; why: string } | null } | null;
+  base_url?: string;
 };
 
 let contract: Contract | null = null;
@@ -44,12 +48,16 @@ export function deref(spec: any, node: any, depth = 0, seen: string[] = []): any
 
 // OpenAPI's schema dialect to JSON Schema that Postman's pm.response.to.have.jsonSchema accepts.
 const DROP = new Set(["example", "examples", "xml", "externalDocs", "discriminator", "nullable", "x-nullable", "readOnly", "writeOnly", "deprecated"]);
+// Postman's validator stops with "unknown format" on OpenAPI's own formats (int64, int32, float, double,
+// byte, binary, password) and on custom ones; it knows these standard ones (checked in check-contract).
+const KNOWN_FORMATS = new Set(["date-time", "date", "email", "uri", "uuid"]);
 export function toJsonSchema(s: any): any {
   if (Array.isArray(s)) return s.map(toJsonSchema);
   if (!s || typeof s !== "object") return s;
   const out: any = {};
   for (const [k, v] of Object.entries(s)) {
     if (DROP.has(k) || k.startsWith("x-")) continue;
+    if (k === "format" && !(typeof v === "string" && KNOWN_FORMATS.has(v))) continue; // the type still checks it
     out[k] = ["properties", "patternProperties", "definitions", "$defs"].includes(k) && v && typeof v === "object"
       ? Object.fromEntries(Object.entries(v as object).map(([pk, pv]) => [pk, toJsonSchema(pv)]))
       : toJsonSchema(v);
@@ -83,7 +91,8 @@ export const contractOverview = tool(
       const sec = c.spec?.components?.securitySchemes ?? c.spec?.securityDefinitions ?? {};
       const eps = c.endpoints.filter((e) => !scope || scope.includes(e.key));
       return text(clip(JSON.stringify({
-        ...base, spec_version: c.spec_version,
+        ...base, spec_version: c.spec_version, base_url_in_use: c.base_url ?? null,
+        credentials: c.auth ? { environment_variables: c.auth.variables, login_endpoint: c.auth.login } : null,
         description: typeof c.spec?.info?.description === "string" ? c.spec.info.description.slice(0, 1500) : null,
         authentication: { schemes: sec, applied_by_default: c.spec?.security ?? [] },
         endpoints: eps.map((e) => ({ endpoint: e.key, summary: e.summary, documented_responses: e.responses, needs_auth: e.secured })),
@@ -209,6 +218,32 @@ export function parsePlan(json: string): PlanT {
   const dup = ids.find((id, i) => ids.indexOf(id) !== i);
   if (dup) throw new Error(`Case id ${dup} is used twice.`);
   return r.data;
+}
+
+// Credentials come from variables, never written into the collection. Only security cases may send a
+// literal (deliberately wrong) credential. Returns where literals were found.
+const CREDENTIAL_HEADER = /^(authorization|proxy-authorization|x-api-key|api[-_]?key|x-auth-token|x-access-token|token|cookie)$/i;
+const literal = (v: unknown) => typeof v === "string" && v.trim() !== "" && !/\{\{[^}]+\}\}/.test(v);
+function authLiterals(auth: any): boolean {
+  if (!auth?.type || auth.type === "noauth" || auth.type === "inherit") return false;
+  const params = auth[auth.type];
+  const list = Array.isArray(params) ? params : params && typeof params === "object" ? Object.entries(params).map(([key, value]) => ({ key, value })) : [];
+  return list.some((p: any) => ["token", "value", "password", "accessToken", "key_value"].includes(p.key) && literal(p.value));
+}
+export function literalCredentials(plan: PlanT, collection: any): string[] {
+  const securityIds = new Set(plan.cases.filter((c) => c.type === "security").map((c) => c.id));
+  const found: string[] = [];
+  if (authLiterals(collection?.auth)) found.push("the collection's auth");
+  const walk = (items: any[] = []) => items.forEach((i) => {
+    if (Array.isArray(i.item)) return walk(i.item);
+    const id = (i.name ?? "").match(/\b(TC\d{2,3})\b/)?.[1];
+    if (id && securityIds.has(id)) return;
+    const headers = (i.request?.header ?? []).filter((h: any) => !h.disabled && CREDENTIAL_HEADER.test(h.key ?? "") && literal(h.value)).map((h: any) => h.key);
+    if (headers.length) found.push(`${i.name} (header ${headers.join(", ")})`);
+    if (authLiterals(i.request?.auth)) found.push(`${i.name} (auth)`);
+  });
+  walk(collection?.item);
+  return found;
 }
 
 // The builder must implement exactly the approved cases: one request per case, named after its id.
