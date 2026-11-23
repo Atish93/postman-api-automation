@@ -39,7 +39,15 @@ const ENTRIES: Record<string, Entry> = {
       return ev ? JSON.parse(ev.data_json) : {};
     },
     after: (req, _res, asked) => {
-      const yes = String(b(req).answer).trim().toLowerCase() === "y";
+      const answer = String(b(req).answer).trim();
+      const edited = answer.startsWith("{"); // the human's edited test cases: an approval with changes
+      const yes = edited || answer.toLowerCase() === "y";
+      if (asked.kind === "test_cases") {
+        let n = asked.plan?.cases?.length ?? 0;
+        try { if (edited) n = JSON.parse(answer).cases.length; } catch {}
+        return { action: yes ? "run.approved" : "run.refused", summary: `${yes ? `Approved ${n} test cases${edited ? " with changes" : ""}` : "Sent the test cases back with feedback"} (run #${p(req).id})`,
+          details: { run_id: Number(p(req).id), kind: "test_cases", cases: n, ...(!yes && { feedback: answer.slice(0, 500) }) } };
+      }
       const what = asked.kind === "plan" ? "the test plan" : asked.kind === "known_bugs_over_limit" ? `marking ${asked.requests?.length ?? "several"} requests as known bugs`
         : asked.request ? `${/^[aeiou]/i.test(asked.kind ?? "") ? "an" : "a"} ${asked.kind ? `${asked.kind} change` : "change"} to "${asked.request}"` : asked.question ?? "a request";
       return { action: yes ? "run.approved" : "run.refused", summary: `${yes ? "Approved" : "Refused"} ${what} (run #${p(req).id})`, details: { run_id: Number(p(req).id), asked } };

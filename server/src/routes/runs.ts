@@ -175,7 +175,9 @@ export function runsRoutes(app: FastifyInstance, db: DB, runs: RunManager) {
   app.post<{ Params: { id: string } }>("/api/runs/:id/approval", async (req) => {
     const id = Number(req.params.id);
     getRow(id);
-    const { answer } = z.object({ answer: z.string().trim().min(1).max(500) }).parse(req.body);
+    // A reply is usually short ("y" or feedback), but approving edited test cases sends the whole plan as JSON.
+    const { answer } = z.object({ answer: z.string().trim().min(1).max(1_000_000) }).parse(req.body);
+    if (!answer.startsWith("{") && answer.length > 5000) throw new HttpError(400, "Keep feedback under 5000 characters.");
     if (!runs.answerApproval(id, answer)) throw new HttpError(409, "This run isn't waiting for an approval.");
     return { ok: true };
   });

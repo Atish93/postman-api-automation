@@ -152,6 +152,29 @@ test("audit log: an answered approval says what was approved", async () => {
   assert.equal(refused.summary, `Refused an assertion change to "02 Items" (run #${id})`);
 });
 
+test("case review: an edited plan (thousands of characters) is accepted and logged as an approval with changes", async () => {
+  const id = Number(db.prepare("INSERT INTO runs (collection_name, environment_label, kind, ai_mode, status, created_at) VALUES ('Contract: Pets', 'Test', 'ai', 'contract', 'running', '')").run().lastInsertRowid);
+  const cases = Array.from({ length: 12 }, (_, i) => ({ id: `TC${String(i + 1).padStart(2, "0")}`, type: "positive", title: `Case ${i + 1}`, expected: "200. Body is a JSON array matching the 200 array-of-Pet schema; every item has a string name and an array photoUrls. ".repeat(3) }));
+  db.prepare("INSERT INTO run_events (run_id, seq, type, data_json, created_at) VALUES (?, 1, 'approval_request', ?, '')").run(id, JSON.stringify({ id: 1, kind: "test_cases", plan: { collection_name: "Pets", cases } }));
+  const real = runs.answerApproval;
+  const received: string[] = [];
+  runs.answerApproval = (_id: number, answer: string) => (received.push(answer), true);
+  try {
+    const edited = JSON.stringify({ collection_name: "Pets", cases: cases.slice(0, 10) });
+    assert.ok(edited.length > 3000, `the edited plan is ${edited.length} characters`);
+    const r = await call("POST", `/api/runs/${id}/approval`, { answer: edited });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(received[0], edited, "the whole plan reaches the agents");
+    assert.equal((await call("POST", `/api/runs/${id}/approval`, { answer: "Please add negative cases" })).status, 200);
+    assert.equal((await call("POST", `/api/runs/${id}/approval`, { answer: "x".repeat(6000) })).status, 400, "plain feedback stays short");
+  } finally {
+    runs.answerApproval = real;
+  }
+  const log = (await call("GET", `/api/audit?q=run%20%23${id}`)).body.map((e: any) => `${e.action}: ${e.summary}`);
+  assert.ok(log.includes(`run.approved: Approved 10 test cases with changes (run #${id})`), log.join("\n"));
+  assert.ok(log.includes(`run.refused: Sent the test cases back with feedback (run #${id})`), log.join("\n"));
+});
+
 // ---- Parallel runs ----
 
 test("parallel runs: up to the setting at once, never the same collection on the same environment together", async () => {

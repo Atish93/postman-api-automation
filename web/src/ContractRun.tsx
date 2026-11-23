@@ -1,6 +1,6 @@
 // Contract runs on the run page: reviewing the analyst's test cases (keep, edit, remove, add, or send
 // back), what was approved, and adding the result to the Postman workspace and collection you choose.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { api, type ContractCase, type ContractPlan, type Run } from "./api.ts";
@@ -58,6 +58,7 @@ export function CaseReview({ run, plan }: { run: Run; plan: ContractPlan }) {
   };
   const invalid = kept.some((r) => !r.title.trim() || !r.expected.trim());
   const endpoints = [...new Set(rows.map((r) => r.endpoint || "Other"))];
+  const setKeep = (match: (r: Row) => boolean, keep: boolean) => setRows((rs) => rs.map((r) => (match(r) ? { ...r, keep } : r)));
 
   return (
     <section className="rounded-xl border-2 p-4" style={{ borderColor: "var(--status-warning)", background: "color-mix(in srgb, var(--status-warning) 6%, var(--card))" }}>
@@ -65,10 +66,22 @@ export function CaseReview({ run, plan }: { run: Run; plan: ContractPlan }) {
       <p className="mt-1 text-sm text-ink-2">The Contract Analyst wrote {plan.cases.length} cases for <strong className="text-ink">{plan.collection_name}</strong>. Untick a case to drop it, open one to edit it, or add your own. Nothing is built until you approve.</p>
       <div className="mt-3"><PlanFacts plan={plan} /></div>
 
-      <div className="mt-4 space-y-3">
-        {endpoints.map((ep) => (
+      <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
+        <span className="text-ink-2">{kept.length} of {rows.length} cases selected</span>
+        <Button size="sm" icon="check" disabled={kept.length === rows.length} onClick={() => setKeep(() => true, true)}>Select all</Button>
+        <Button size="sm" icon="x" disabled={kept.length === 0} onClick={() => setKeep(() => true, false)}>Deselect all</Button>
+      </div>
+      <div className="mt-3 space-y-3">
+        {endpoints.map((ep) => {
+          const inGroup = rows.filter((r) => (r.endpoint || "Other") === ep);
+          const on = inGroup.filter((r) => r.keep).length;
+          return (
           <div key={ep}>
-            <div className="mb-1 font-mono text-xs text-ink-2">{ep}</div>
+            <label className="mb-1 flex w-fit cursor-pointer items-center gap-2 font-mono text-xs text-ink-2">
+              <GroupCheckbox checked={on === inGroup.length} partial={on > 0 && on < inGroup.length} label={`All cases for ${ep}`}
+                onChange={(v) => setKeep((r) => (r.endpoint || "Other") === ep, v)} />
+              {ep} <span className="font-sans text-muted">({on}/{inGroup.length})</span>
+            </label>
             <ul className="divide-y divide-line overflow-hidden rounded-lg bg-card ring-1 ring-line">
               {rows.filter((r) => (r.endpoint || "Other") === ep).map((r) => (
                 <li key={r.id} className={r.keep ? "" : "opacity-50"}>
@@ -100,7 +113,8 @@ export function CaseReview({ run, plan }: { run: Run; plan: ContractPlan }) {
               ))}
             </ul>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start">
@@ -118,6 +132,13 @@ export function CaseReview({ run, plan }: { run: Run; plan: ContractPlan }) {
       </div>
     </section>
   );
+}
+
+// A checkbox for a group of cases: checked, unchecked, or partly (some cases kept).
+function GroupCheckbox({ checked, partial, label, onChange }: { checked: boolean; partial: boolean; label: string; onChange: (v: boolean) => void }) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (ref.current) ref.current.indeterminate = partial; }, [partial]);
+  return <input ref={ref} type="checkbox" className="accent-[var(--accent)]" aria-label={label} checked={checked} onChange={(e) => onChange(e.target.checked)} />;
 }
 
 // After the run: what was approved, and where it went (or a button to choose).

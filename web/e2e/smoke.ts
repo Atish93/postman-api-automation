@@ -402,7 +402,17 @@ await check("Case review: drop one, edit one, add one; what's sent is exactly th
   await page.getByText("Review the test cases").waitFor();
   await page.getByText("404 has no body schema").waitFor();
   await button("Approve all 3 cases").waitFor();
+  await button("Deselect all").click();
+  await page.getByText("0 of 3 cases selected").waitFor();
+  if (!(await page.getByRole("button", { name: /^Approve/ }).isDisabled())) throw new Error("approving nothing is allowed");
+  await button("Select all").click();
+  await page.getByText("3 of 3 cases selected").waitFor();
+  await page.getByLabel("All cases for GET /pets/{id}").uncheck();
+  await page.getByText("1 of 3 cases selected").waitFor();
+  await page.getByLabel("All cases for GET /pets/{id}").check();
+  await page.getByText("3 of 3 cases selected").waitFor();
   await page.getByLabel("Keep TC02").uncheck();
+  if (!(await page.getByLabel("All cases for GET /pets/{id}").evaluate((el: any) => el.indeterminate))) throw new Error("the endpoint's checkbox should show 'some'");
   await page.getByRole("button", { name: /TC03/ }).click();
   await page.getByLabel("Expected").fill("200 with a name and an id");
   await button("Add a case").click();
@@ -415,6 +425,12 @@ await check("Case review: drop one, edit one, add one; what's sent is exactly th
   if (p.cases[1].expected !== "200 with a name and an id" || p.cases[2].title !== "List pets with a negative limit") throw new Error(`edits not sent: ${sent}`);
   if (p.collection_name !== plan.collection_name) throw new Error("the plan's other fields were lost");
   await page.unroute(`**/api/runs/${waiting}/approval`);
+  // Now for real, with a long edit: the server must accept the size (this sample run has no agent behind it, so it answers "not waiting").
+  await page.getByRole("button", { name: /TC01/ }).click();
+  await page.getByLabel("Expected").first().fill("200. Body is a JSON array matching the 200 array-of-Pet schema; every item has a string name and an array photoUrls. ".repeat(8));
+  await page.getByRole("button", { name: /^Approve/ }).click();
+  await page.getByText("This run isn't waiting for an approval.").waitFor();
+  if (await page.getByText(/Too big/).count()) throw new Error("the edited plan was refused as too big");
 });
 
 await check("Add to Postman: choose the workspace, then a folder in an existing collection, confirm", async () => {
