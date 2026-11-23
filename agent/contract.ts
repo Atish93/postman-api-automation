@@ -12,7 +12,7 @@ type Contract = {
   selected: string[] | null; focus: string | null; spec: any | null; text: string | null;
   // How to authenticate, worked out by the dashboard from the spec (null for documents):
   // the environment variables the tests read, and the login endpoint if there is one.
-  auth?: { variables: { key: string; secret: boolean; purpose: string }[]; schemes: unknown[]; login: { endpoint: string; why: string } | null } | null;
+  auth?: { variables: { key: string; secret: boolean; purpose: string; auto?: boolean; how?: string }[]; schemes: unknown[]; login: { endpoint: string; why: string; kind?: string } | null } | null;
   base_url?: string;
 };
 

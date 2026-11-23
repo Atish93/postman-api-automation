@@ -74,7 +74,7 @@ export type ContractSummary = {
 };
 export type Publication = { id: number; contract_id: number | null; run_id: number | null; workspace_id: string; workspace_name: string | null; collection_uid: string; collection_name: string; folder_name: string | null; requests: number; published_at: string };
 export type ContractChanges = { added: string[]; removed: string[]; changed: { key: string; what: string[] }[]; text_changed?: boolean; from_version?: string | null; to_version?: string | null; at?: string };
-export type AuthVariable = { key: string; secret: boolean; purpose: string; auto?: boolean };
+export type AuthVariable = { key: string; secret: boolean; purpose: string; auto?: boolean; how?: string };
 export type ContractAuth = { variables: AuthVariable[]; schemes: { name: string; type: string; detail: string }[]; login: { endpoint: string; why: string } | null };
 export type ContractCheck = {
   base_url: string; servers: string[]; base_url_matches: boolean | null; suggested_base_url: string | null;

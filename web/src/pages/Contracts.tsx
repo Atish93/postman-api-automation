@@ -447,16 +447,17 @@ function PreRunCheck({ c, env, check, anyway, setAnyway }: { c: ContractDetail; 
           The contract says the API is at <span className="break-all font-mono text-xs">{d.suggested_base_url}</span>; {env.label} uses <span className="break-all font-mono text-xs">{env.base_url}</span>.{" "}
           <button className="text-accent hover:underline" disabled={save.isPending} onClick={() => save.mutate({ base_url: d.suggested_base_url! })}>Use the contract's base URL in {env.label}</button>
         </>)}
-        {d.credentials.map((v) => line(v.auto ? true : v.present, <>
+        {d.credentials.map((v) => line(v.auto || v.present ? true : null, <>
           <span className="font-mono text-xs">{`{{${v.key}}}`}</span> <span className="text-ink-2">{v.purpose}</span>{" "}
-          {v.auto ? <span className="text-xs text-muted">(no need to set it)</span> : v.present ? <span className="text-xs text-good-ink">set in {env.label}</span> : <span className="text-xs text-bad-ink">not set in {env.label}</span>}
+          {v.auto ? <span className="text-xs text-muted">(fetched by the tests: no need to set it)</span> : v.present ? <span className="text-xs text-good-ink">set in {env.label}</span> : <span className="text-xs text-warn-ink">not set in {env.label}</span>}
+          {!v.auto && !v.present && v.how && <span className="mt-0.5 block text-xs text-muted">{v.how}</span>}
         </>))}
         {d.login && line(true, <>The tests log in once with <span className="font-mono text-xs">{d.login.endpoint}</span> ({d.login.why}) and share the token with every request.</>)}
         {!d.credentials.length && line(true, "The contract doesn't ask for credentials.")}
       </ul>
       {missing.length > 0 && (
         <form className="space-y-2 border-t border-line pt-3" onSubmit={(e) => { e.preventDefault(); save.mutate({ vars: Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim())) }); }}>
-          <div className="text-xs text-ink-2">Add the missing values to {env.label} (secrets are stored encrypted). For the demo Petstore, any api_key such as <span className="font-mono">special-key</span> works.</div>
+          <div className="text-xs text-ink-2">Missing credentials don't stop the run: tests of endpoints that check them will fail with 401/403 until they're set. Add them to {env.label} here (secrets are stored encrypted). For the demo Petstore, the api_key <span className="font-mono">special-key</span> works.</div>
           <div className="grid gap-2 sm:grid-cols-2">
             {missing.map((v) => (
               <input key={v.key} className={`${inputClass} font-mono`} aria-label={`Value for ${v.key}`} placeholder={v.key} type={v.secret ? "password" : "text"} autoComplete="off"

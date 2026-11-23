@@ -240,6 +240,8 @@ You are given the approved test cases as JSON. Implement every case, in order, a
 \`\`\`
 ${LOGIN_ONCE_SCRIPT}
 \`\`\`
+  * For an OAuth2 client-credentials token URL (credentials.login_endpoint says "client-credentials"), the same script posts form fields instead: body { mode: "urlencoded", urlencoded: [grant_type=client_credentials, client_id={{clientId}}, client_secret={{clientSecret}}] } and reads access_token from the response.
+  * Credentials that need a person (an OAuth2 browser flow, or an API key from the provider) come from the environment as they are: never try to obtain them.
   * Security cases override the collection's auth on their own request: auth {"type": "noauth"} for no credentials, or a deliberately wrong value for wrong credentials.
 - Read each endpoint in the contract before writing its request, so paths, parameters, headers and bodies match it exactly.
 - Assert what each case expects. For responses with a schema in the contract, get it with contract_response_schema and assert it in full: pm.response.to.have.jsonSchema(schema) (paste the schema into the script as a constant).

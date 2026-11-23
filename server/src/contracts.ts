@@ -208,8 +208,11 @@ export function resolveServers(servers: string[], sourceUrl: string | null): str
   });
 }
 
-export type AuthVariable = { key: string; secret: boolean; purpose: string; auto?: boolean };
-export type ContractAuth = { variables: AuthVariable[]; schemes: { name: string; type: string; detail: string }[]; login: { endpoint: string; why: string } | null };
+// how: where a person gets the value (shown when it isn't set); auto: the tests fetch it themselves.
+export type AuthVariable = { key: string; secret: boolean; purpose: string; auto?: boolean; how?: string };
+export type Login = { endpoint: string; why: string; kind: "endpoint" | "password" | "client_credentials" };
+export type ContractAuth = { variables: AuthVariable[]; schemes: { name: string; type: string; detail: string }[]; login: Login | null };
+const BROWSER_FLOWS = new Set(["implicit", "authorizationCode", "accessCode"]);
 
 const LOGIN_PATH = /\/(log-?in|sign-?in|auth(enticate)?|token|oauth\/token|sessions?)$/i;
 
@@ -231,30 +234,45 @@ export function authOf(spec: any): ContractAuth | null {
     if (type === "apiKey") {
       const key = apiKeys++ ? `apiKey_${name.replace(/\W+/g, "_")}` : "apiKey";
       const where = s.in === "header" ? "header" : s.in === "cookie" ? "cookie" : "query parameter";
-      add({ key, secret: true, purpose: `API key for "${name}", sent in the ${where} "${s.name}"` });
+      add({ key, secret: true, purpose: `API key for "${name}", sent in the ${where} "${s.name}"`,
+        how: "Issued by the API's provider (for example from its developer portal); no endpoint hands it out, so a script can't fetch it. Only needed if the server checks it." });
       out.push({ name, type: "apiKey", detail: `${s.in} "${s.name}"` });
     } else if ((type === "http" && /^basic$/i.test(s.scheme)) || type === "basic") {
       add({ key: "username", secret: false, purpose: `User name for "${name}" (HTTP basic)` });
       add({ key: "password", secret: true, purpose: `Password for "${name}" (HTTP basic)` });
       out.push({ name, type: "basic", detail: "HTTP basic" });
     } else if (type === "http" || type === "oauth2" || type === "openIdConnect") {
-      // OAuth2's password flow is a login endpoint: the tests can fetch the token themselves.
-      const tokenUrl = s.flows?.password?.tokenUrl ?? (s.flow === "password" ? s.tokenUrl : null);
-      if (tokenUrl && !login) login = { endpoint: `POST ${tokenUrl}`, why: `the OAuth2 password flow of "${name}"` };
-      add({ key: "accessToken", secret: true, purpose: `Access token for "${name}" (${type === "http" ? `HTTP ${s.scheme}` : type})` });
-      const flows = s.flows ? Object.keys(s.flows).join(", ") : s.flow ?? "";
+      // OAuth2's password and client-credentials flows post to a token URL: the tests can fetch the token
+      // themselves. The browser flows (implicit, authorization code) need a person to sign in.
+      const flowNames: string[] = s.flows ? Object.keys(s.flows) : s.flow ? [s.flow] : [];
+      const password = s.flows?.password?.tokenUrl ?? (s.flow === "password" ? s.tokenUrl : null);
+      const client = s.flows?.clientCredentials?.tokenUrl ?? (s.flow === "application" ? s.tokenUrl : null);
+      if (password && !login) login = { endpoint: `POST ${password}`, why: `the OAuth2 password flow of "${name}"`, kind: "password" };
+      else if (client && !login) login = { endpoint: `POST ${client}`, why: `the OAuth2 client-credentials flow of "${name}"`, kind: "client_credentials" };
+      const browserOnly = type === "oauth2" && flowNames.length > 0 && flowNames.every((f) => BROWSER_FLOWS.has(f));
+      add({ key: "accessToken", secret: true, purpose: `Access token for "${name}" (${type === "http" ? `HTTP ${s.scheme}` : type})`,
+        how: browserOnly
+          ? `OAuth2 ${flowNames.join("/")} needs a person to sign in through a browser, which a script can't do. Get a token once (in Postman: Authorization, OAuth 2.0, Get New Access Token) and paste it here; it lasts until it expires. Only needed if the server checks it.`
+          : type === "openIdConnect" ? "Get a token from the identity provider and paste it here."
+          : "A token the API gives you after logging in. If the contract has a login endpoint, the tests fetch it themselves." });
+      const flows = flowNames.join(", ");
       out.push({ name, type, detail: type === "http" ? `HTTP ${s.scheme}` : `${type}${flows ? ` (${flows})` : ""}` });
     }
   }
   // An unsecured POST to a login-like path is the login endpoint.
   if (!login) {
     for (const [path, item] of Object.entries<any>(spec.paths ?? {})) {
-      if (item?.post && LOGIN_PATH.test(path)) { login = { endpoint: `POST ${path}`, why: "its path looks like a login" }; break; }
+      if (item?.post && LOGIN_PATH.test(path)) { login = { endpoint: `POST ${path}`, why: "its path looks like a login", kind: "endpoint" }; break; }
     }
   }
   if (login) {
-    add({ key: "username", secret: false, purpose: `User name for logging in (${login.endpoint})` });
-    add({ key: "password", secret: true, purpose: `Password for logging in (${login.endpoint})` });
+    if (login.kind === "client_credentials") {
+      add({ key: "clientId", secret: false, purpose: `Client id for ${login.endpoint}`, how: "From the API's provider, when you register an app or a service account." });
+      add({ key: "clientSecret", secret: true, purpose: `Client secret for ${login.endpoint}`, how: "From the API's provider, with the client id." });
+    } else {
+      add({ key: "username", secret: false, purpose: `User name for logging in (${login.endpoint})`, how: "A test account on the environment under test." });
+      add({ key: "password", secret: true, purpose: `Password for logging in (${login.endpoint})`, how: "The test account's password." });
+    }
     vars.set("accessToken", { key: "accessToken", secret: true, auto: true, purpose: `Filled in by the tests: they log in with ${login.endpoint} once and share the token` });
   }
   return { variables: [...vars.values()], schemes: out, login };

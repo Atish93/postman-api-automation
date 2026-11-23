@@ -212,10 +212,17 @@ test("a relative server (\"/api/v3\") is resolved against the spec's URL; creden
 test("credentials: a login endpoint or OAuth2 password flow means username/password, and the token is fetched by the tests", async () => {
   const { authOf } = await import("../src/contracts.ts");
   const login = authOf({ paths: { "/auth/login": { post: {} }, "/orders": { get: {} } }, components: { securitySchemes: { bearer: { type: "http", scheme: "bearer" } } } })!;
-  assert.deepEqual(login.login, { endpoint: "POST /auth/login", why: "its path looks like a login" });
+  assert.deepEqual(login.login, { endpoint: "POST /auth/login", why: "its path looks like a login", kind: "endpoint" });
   assert.deepEqual(login.variables.map((v) => [v.key, !!v.auto]), [["accessToken", true], ["username", false], ["password", false]]);
   const oauth = authOf({ swagger: "2.0", paths: {}, securityDefinitions: { o: { type: "oauth2", flow: "password", tokenUrl: "https://id.example.com/token" } } })!;
   assert.equal(oauth.login?.endpoint, "POST https://id.example.com/token");
+  // Client credentials: the token is fetched with a client id and secret, so accessToken isn't asked for.
+  const client = authOf({ paths: {}, components: { securitySchemes: { svc: { type: "oauth2", flows: { clientCredentials: { tokenUrl: "https://id.example.com/oauth/token", scopes: {} } } } } } })!;
+  assert.deepEqual([client.login?.kind, client.variables.map((v) => [v.key, !!v.auto])], ["client_credentials", [["accessToken", true], ["clientId", false], ["clientSecret", false]]]);
+  // A browser-only flow (Petstore's implicit) can't be scripted: it's asked for, and the dashboard says how to get one.
+  const implicit = authOf({ paths: { "/user/login": { get: {} } }, components: { securitySchemes: { petstore_auth: { type: "oauth2", flows: { implicit: { authorizationUrl: "https://x/authorize", scopes: {} } } } } } })!;
+  assert.equal(implicit.login, null, "a GET /user/login that no security scheme uses isn't treated as the token source");
+  assert.match(implicit.variables[0].how!, /sign in through a browser.*Get New Access Token/);
   const basic = authOf({ paths: {}, components: { securitySchemes: { b: { type: "http", scheme: "basic" } } } })!;
   assert.deepEqual(basic.variables.map((v) => v.key), ["username", "password"]);
   assert.deepEqual(authOf({ paths: {} })!.variables, []);
