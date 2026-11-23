@@ -374,7 +374,19 @@ function GenerateDialog({ c, open, onClose, endpoints, count }: { c: ContractDet
 
   return (
     <Modal open={open} onClose={onClose} title={`Generate tests for "${c.name}"`} wide
-      footer={creating ? null : <><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" icon="sparkle" busy={start.isPending} disabled={!chosenEnv || blocked} onClick={() => start.mutate()}>Start</Button></>}>
+      footer={creating ? null : <>
+        {/* Say why Start is held, so it isn't mistaken for missing credentials (those never block it). */}
+        {(blocked || !chosenEnv) && (
+          <span className="mr-auto flex items-center gap-1.5 text-xs text-bad-ink">
+            <Icon name="alert" size={12} />
+            {!chosenEnv ? "Choose or create an environment first." : verdict === "not_found"
+              ? "Held: the contract's endpoint isn't at this base URL. Fix the base URL above, or tick Start anyway."
+              : "Held: nothing answered at this base URL. Check it above, or tick Start anyway."}
+          </span>
+        )}
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button variant="primary" icon="sparkle" busy={start.isPending} disabled={!chosenEnv || blocked} onClick={() => start.mutate()}>Start</Button>
+      </>}>
       <div className="space-y-4">
         <ol className="space-y-1.5 text-sm text-ink-2">
           <li><strong className="text-ink">1. Analyse.</strong> The Contract Analyst reads {isSpec ? `${count === c.endpoints.length ? "every endpoint" : `the ${count} selected endpoint${count === 1 ? "" : "s"}`}` : "the document"} and writes test cases, each tied to what the contract says.</li>
