@@ -357,10 +357,19 @@ await check("Contracts: upload an OpenAPI file and see its endpoints", async () 
   if (!(await button("Generate tests").isDisabled())) throw new Error("Generate is enabled with nothing selected");
   await button("Select all").click();
   await page.getByText("3 of 3 selected for testing").waitFor();
+  // A group: the spec has no tags here, so endpoints are grouped by path ("/pets").
+  await page.getByLabel("All endpoints in /pets").uncheck();
+  await page.getByText("0 of 3 selected for testing").waitFor();
+  await page.getByLabel("All endpoints in /pets").check();
+  await page.getByText("3 of 3 selected for testing").waitFor();
+  // A range: click the first, shift-click the last; everything between follows.
   await button("Deselect all").click();
-  await page.getByLabel("Test GET /pets", { exact: true }).check();
-  await page.getByLabel("Test GET /pets/{id}").check();
+  await page.getByLabel("Test GET /pets", { exact: true }).click();
+  await page.getByLabel("Test GET /pets/{id}").click({ modifiers: ["Shift"] });
+  await page.getByText("3 of 3 selected for testing").waitFor();
+  await page.getByLabel("Test POST /pets").click();
   await page.getByText("2 of 3 selected for testing").waitFor();
+  if (!(await page.getByLabel("All endpoints in /pets").evaluate((el: any) => el.indeterminate))) throw new Error("the group checkbox should show 'some'");
 });
 
 await check("Contracts: generate tests for the chosen endpoints (a down server stops it before any AI cost)", async () => {

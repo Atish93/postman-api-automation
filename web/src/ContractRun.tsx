@@ -135,7 +135,7 @@ export function CaseReview({ run, plan }: { run: Run; plan: ContractPlan }) {
 }
 
 // A checkbox for a group of cases: checked, unchecked, or partly (some cases kept).
-function GroupCheckbox({ checked, partial, label, onChange }: { checked: boolean; partial: boolean; label: string; onChange: (v: boolean) => void }) {
+export function GroupCheckbox({ checked, partial, label, onChange }: { checked: boolean; partial: boolean; label: string; onChange: (v: boolean) => void }) {
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => { if (ref.current) ref.current.indeterminate = partial; }, [partial]);
   return <input ref={ref} type="checkbox" className="accent-[var(--accent)]" aria-label={label} checked={checked} onChange={(e) => onChange(e.target.checked)} />;

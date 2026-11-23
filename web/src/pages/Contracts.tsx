@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router";
 import { api, type ContractDetail, type Endpoint } from "../api.ts";
 import { dateTime, money, relativeTime } from "../format.ts";
+import { GroupCheckbox } from "../ContractRun.tsx";
 import { Button, Card, EmptyState, ErrorNote, Field, Icon, MethodBadge, Modal, PageHeader, Spinner, StatusBadge, inputClass, useToast } from "../ui.tsx";
 
 const SOURCE: Record<string, string> = { file: "Uploaded", url: "From a link", postman: "From Postman" };
@@ -166,12 +167,36 @@ export function ContractPage() {
   });
   const c = q.data;
   const shown = useMemo(() => (c?.endpoints ?? []).filter((e) => !filter || `${e.key} ${e.summary ?? ""} ${e.tags.join(" ")}`.toLowerCase().includes(filter.toLowerCase())), [c, filter]);
+  // Groups: the spec's first tag (e.g. pet, store, user), or else the path's first part.
+  const groups = useMemo(() => {
+    const m = new Map<string, Endpoint[]>();
+    for (const e of shown) {
+      const g = e.tags[0] ?? `/${e.path.split("/").filter(Boolean)[0] ?? ""}`;
+      m.set(g, [...(m.get(g) ?? []), e]);
+    }
+    return [...m];
+  }, [shown]);
+  const lastClicked = useRef<string | null>(null); // for shift-click ranges
 
   if (q.isPending) return <div className="flex justify-center py-20 text-muted"><Spinner size={24} /></div>;
   if (q.error || !c) return <ErrorNote error={q.error} />;
   const all = c.endpoints.map((e) => e.key);
   const isOn = (k: string) => (selected ? selected.has(k) : true);
-  const toggle = (k: string) => setSelected((s) => { const n = new Set(s ?? all); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  // Click one endpoint, then shift-click another: everything between them gets the same state.
+  const setMany = (keys: string[], on: boolean) => setSelected((s) => {
+    const n = new Set(s ?? all);
+    for (const k of keys) on ? n.add(k) : n.delete(k);
+    return n.size === all.length ? null : n;
+  });
+  const toggle = (k: string, shift: boolean) => {
+    const on = !isOn(k);
+    const order = shown.map((e) => e.key);
+    const from = lastClicked.current ? order.indexOf(lastClicked.current) : -1;
+    const to = order.indexOf(k);
+    setMany(shift && from >= 0 ? order.slice(Math.min(from, to), Math.max(from, to) + 1) : [k], on);
+    lastClicked.current = k;
+  };
+
   // Select all / Deselect all act on the endpoints shown (all of them, or those matching the filter).
   const visible = shown.map((e) => e.key);
   const selectShown = (on: boolean) => setSelected((s) => {
@@ -211,10 +236,22 @@ export function ContractPage() {
                   <Button size="sm" variant="ghost" icon="x" disabled={noneShownOn} onClick={() => selectShown(false)}>{filter ? "Deselect shown" : "Deselect all"}</Button>
                 </div>}>
                 {all.length > 8 && <div className="px-4 pt-3"><input className={inputClass} aria-label="Filter endpoints" placeholder="Filter by path, summary or tag" value={filter} onChange={(e) => setFilter(e.target.value)} /></div>}
-                <ul className="divide-y divide-line">
-                  {shown.map((e) => <EndpointRow key={e.key} e={e} on={isOn(e.key)} toggle={() => toggle(e.key)} />)}
-                  {shown.length === 0 && <li className="px-4 py-4 text-sm text-ink-2">No endpoint matches "{filter}".</li>}
-                </ul>
+                <p className="px-4 pt-2 text-xs text-muted">Tip: tick a group to select it all, or click one endpoint and shift-click another to select everything between.</p>
+                {groups.map(([g, eps]) => {
+                  const on = eps.filter((e) => isOn(e.key)).length;
+                  return (
+                    <div key={g} className="mt-2">
+                      <label className="flex cursor-pointer items-center gap-3 border-b border-line bg-raised px-4 py-2 text-sm font-medium">
+                        <GroupCheckbox checked={on === eps.length} partial={on > 0 && on < eps.length} label={`All endpoints in ${g}`} onChange={(v) => setMany(eps.map((e) => e.key), v)} />
+                        {g} <span className="font-normal text-muted">({on}/{eps.length})</span>
+                      </label>
+                      <ul className="divide-y divide-line">
+                        {eps.map((e) => <EndpointRow key={e.key} e={e} on={isOn(e.key)} toggle={(shift) => toggle(e.key, shift)} />)}
+                      </ul>
+                    </div>
+                  );
+                })}
+                {shown.length === 0 && <p className="px-4 py-4 text-sm text-ink-2">No endpoint matches "{filter}".</p>}
                 {count === 0 && <p className="border-t border-line px-4 py-3 text-sm text-ink-2">Select at least one endpoint to generate tests.</p>}
               </Card>
             )}
@@ -258,11 +295,12 @@ export function ContractPage() {
   );
 }
 
-function EndpointRow({ e, on, toggle }: { e: Endpoint; on: boolean; toggle: () => void }) {
+function EndpointRow({ e, on, toggle }: { e: Endpoint; on: boolean; toggle: (shift: boolean) => void }) {
   return (
     <li>
-      <label className={`flex cursor-pointer items-start gap-3 px-4 py-2.5 hover:bg-raised ${on ? "" : "opacity-60"}`}>
-        <input type="checkbox" className="mt-1 accent-[var(--accent)]" checked={on} onChange={toggle} aria-label={`Test ${e.key}`} />
+      <label className={`flex cursor-pointer select-none items-start gap-3 px-4 py-2.5 hover:bg-raised ${on ? "" : "opacity-60"}`}>
+        <input type="checkbox" className="mt-1 accent-[var(--accent)]" checked={on} aria-label={`Test ${e.key}`}
+          onClick={(ev) => toggle(ev.shiftKey)} onChange={() => {}} />
         <MethodBadge method={e.method} />
         <span className="min-w-0 flex-1">
           <span className={`block break-all font-mono text-xs ${e.deprecated ? "line-through" : ""}`}>{e.path}</span>
