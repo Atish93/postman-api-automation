@@ -61,17 +61,41 @@ export type AiCollectionResult = {
   diagnoses: { request: string; assertion: string; category: string; confidence: string; evidence: string; fix_hint?: string }[];
   changes: string[]; published: { uid: string; name: string } | null; updated: string | null;
 };
+export type ContractCase = { id: string; endpoint?: string; type: string; title: string; request?: string; expected: string; contract_ref?: string };
+export type ContractPlan = {
+  collection_name: string; summary?: string; auth?: string; endpoints?: string[]; gaps?: string[]; cases: ContractCase[];
+  endpoints_found?: { method: string; path: string; summary?: string }[];
+};
+export type Endpoint = { key: string; method: string; path: string; summary: string | null; operation_id: string | null; tags: string[]; parameters: number; has_body: boolean; responses: string[]; secured: boolean; deprecated: boolean };
+export type ContractSummary = {
+  id: number; name: string; title: string; api_version: string | null; format: "openapi" | "document"; spec_version: string | null;
+  source_kind: "file" | "url" | "postman"; source_ref: string | null; filename: string | null; endpoint_count: number;
+  created_at: string; updated_at: string; checked_at: string | null; last_run: { id: number; status: RunStatus; created_at: string } | null; publications: number;
+};
+export type Publication = { id: number; contract_id: number | null; run_id: number | null; workspace_id: string; workspace_name: string | null; collection_uid: string; collection_name: string; folder_name: string | null; requests: number; published_at: string };
+export type ContractChanges = { added: string[]; removed: string[]; changed: { key: string; what: string[] }[]; text_changed?: boolean; from_version?: string | null; to_version?: string | null; at?: string };
+export type ContractDetail = ContractSummary & {
+  servers: string[]; endpoints: Endpoint[]; warnings: string[]; last_changes: ContractChanges | null;
+  text_preview: string | null; text_length: number | null;
+  runs: { id: number; status: RunStatus; environment_label: string; cost_usd: number | null; created_at: string; finished_at: string | null }[];
+  published: Publication[];
+};
+export type PostmanSpec = { id: string; name: string; type: string | null; updated_at: string | null };
+export type PublishTarget = { kind: "new"; name: string } | { kind: "folder"; collection_uid: string; folder_name: string; replace: boolean };
+
 export type Run = {
-  id: number; kind: "plain" | "ai"; ai_mode: "regression" | "build" | null; request: string | null; status: RunStatus; message: string | null;
+  id: number; kind: "plain" | "ai"; ai_mode: "regression" | "build" | "contract" | null; request: string | null; status: RunStatus; message: string | null;
   schedule_id: number | null; unattended: boolean;
   data_file: { id: number | null; name: string } | null;
+  contract: { id: number | null; endpoints: string[] | null } | null;
   collection: { id: number | null; name: string }; environment: { id: number | null; label: string };
   requests: number | null; assertions: number | null; failed_assertions: number | null;
   cost_usd: number | null; exit_code: number | null;
   created_at: string; started_at: string | null; finished_at: string | null; duration_ms: number | null;
   result?:
     | { environment: { label: string; base_url: string }; executions: Execution[] }
-    | { environment: { label: string; base_url: string }; collections: AiCollectionResult[]; report: string; cost_usd: number; server_issue: string | null }
+    | { environment: { label: string; base_url: string }; collections: AiCollectionResult[]; report: string; cost_usd: number; server_issue: string | null;
+        contract?: { name: string; plan: ContractPlan | null; review_rounds: number; collection: any } }
     | null;
 };
 export type RunEvent = { seq: number; type: string; data: Record<string, any>; created_at: string };
@@ -97,7 +121,8 @@ export type HealerChange = {
 export type StartRun =
   | { kind: "plain"; collection_id: number; environment_id: number; data_file_id?: number }
   | { kind: "ai"; ai_mode: "regression"; collection_id: number; environment_id: number }
-  | { kind: "ai"; ai_mode: "build"; request: string; workspace_id: string; environment_id: number };
+  | { kind: "ai"; ai_mode: "build"; request: string; workspace_id: string; environment_id: number }
+  | { kind: "ai"; ai_mode: "contract"; contract_id: number; environment_id: number; endpoints?: string[]; request?: string };
 
 export type EmailSettings = { configured: boolean; host: string; port: number; secure: boolean; user: string; from: string; dashboard_url: string; has_password: boolean };
 export type ReportRule = { recipients: string[]; send_when: "always" | "failure" | "new_failure"; enabled: boolean };
@@ -196,6 +221,21 @@ export const api = {
   createSchedule: (s: ScheduleInput) => request<Schedule>("POST", "/schedules", s),
   updateSchedule: (id: number, s: ScheduleInput) => request<Schedule>("PUT", `/schedules/${id}`, s),
   deleteSchedule: (id: number) => request<void>("DELETE", `/schedules/${id}`),
+
+  contracts: () => request<ContractSummary[]>("GET", "/contracts"),
+  contract: (id: number) => request<ContractDetail>("GET", `/contracts/${id}`),
+  uploadContract: (filename: string, content_base64: string, name?: string) => request<ContractDetail>("POST", "/contracts/upload", { filename, content_base64, name }),
+  contractFromUrl: (url: string, name?: string) => request<ContractDetail>("POST", "/contracts/url", { url, name }),
+  contractFromPostman: (workspace_id: string, spec_id: string, name?: string) => request<ContractDetail>("POST", "/contracts/postman", { workspace_id, spec_id, name }),
+  refreshContract: (id: number) => request<{ changed: boolean; changes?: ContractChanges; contract: ContractDetail }>("POST", `/contracts/${id}/refresh`),
+  renameContract: (id: number, name: string) => request<ContractDetail>("PATCH", `/contracts/${id}`, { name }),
+  deleteContract: (id: number) => request<void>("DELETE", `/contracts/${id}`),
+  contractSourceUrl: (id: number) => `/api/contracts/${id}/source`,
+  postmanSpecs: (workspaceId: string) => request<PostmanSpec[]>("GET", `/postman/workspaces/${encodeURIComponent(workspaceId)}/specs`),
+  collectionFolders: (uid: string) => request<{ name: string; requests: number }[]>("GET", `/postman/collections/${encodeURIComponent(uid)}/folders`),
+  publishRun: (runId: number, workspace_id: string, target: PublishTarget) =>
+    request<{ workspace: { id: string; name: string }; collection: { uid: string; name: string; id: number | null }; folder: string | null; requests: number }>("POST", `/runs/${runId}/publish`, { workspace_id, target }),
+  runPublications: (runId: number) => request<Publication[]>("GET", `/runs/${runId}/publications`),
 
   dashboard: (days = 30) => request<Dashboard>("GET", `/dashboard?days=${days}`),
 };

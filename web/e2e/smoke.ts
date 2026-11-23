@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeApi, fakePostman, fakeSmtp, fixtureCollection, POSTMAN_KEY } from "../../server/test/helpers.ts";
 import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 
 const require = createRequire(import.meta.url);
 let chromium: any;
@@ -330,6 +331,108 @@ await check("Audit log: lists what happened, including the copied secret and the
   if (await page.getByText("Copied values from Test to Stg").count()) throw new Error("the filter didn't apply");
 });
 
+// ---- Contracts ----
+const PETS = `openapi: 3.0.3
+info: { title: Pet Store, version: 1.0.0 }
+paths:
+  /pets: { get: { summary: List pets, responses: { '200': { description: ok } } }, post: { summary: Add a pet, responses: { '201': { description: created }, '400': { description: invalid } } } }
+  /pets/{id}: { get: { summary: Get a pet, responses: { '200': { description: ok }, '404': { description: not found } } } }
+`;
+let contractId = 0;
+await check("Contracts: upload an OpenAPI file and see its endpoints", async () => {
+  const file = join(dir, "pets.yaml");
+  writeFileSync(file, PETS);
+  await page.goto(`${base}/contracts`);
+  await page.getByText("No contracts yet").waitFor();
+  await button("Add contract").first().click();
+  await page.getByLabel("Choose a contract file").setInputFiles(file);
+  await page.getByRole("dialog").getByRole("button", { name: "Add contract" }).click();
+  await page.waitForURL(/\/contracts\/\d+$/);
+  contractId = Number(page.url().split("/").pop());
+  await page.getByRole("heading", { name: "Pet Store" }).waitFor();
+  await page.getByText("3 of 3 chosen for testing").waitFor();
+  await page.getByLabel("Test POST /pets").uncheck();
+  await page.getByText("2 of 3 chosen for testing").waitFor();
+});
+
+await check("Contracts: generate tests for the chosen endpoints (a down server stops it before any AI cost)", async () => {
+  api.state.mode = "down";
+  await button("Generate tests").click();
+  await page.getByRole("dialog").getByText("You review them").waitFor();
+  await page.getByLabel("Anything to focus on? (optional)").fill("Mostly errors");
+  await page.getByRole("dialog").getByRole("button", { name: "Start" }).click();
+  await page.waitForURL(/\/runs\/\d+$/);
+  await page.getByText("AI contract").first().waitFor();
+  await page.getByRole("link", { name: "Pet Store" }).waitFor();
+  await page.getByText(/Facing server issues, please check \w+ Env/).first().waitFor({ timeout: 60_000 });
+  api.state.mode = "ok";
+});
+
+// Two runs as the agents would leave them: one waiting for the case review, one finished.
+const plan = { collection_name: "Pet Store Contract Tests (agent-built)", summary: "Checks listing and getting pets.", gaps: ["404 has no body schema"],
+  cases: [
+    { id: "TC01", endpoint: "GET /pets", type: "positive", title: "List pets", expected: "200" },
+    { id: "TC02", endpoint: "GET /pets/{id}", type: "negative", title: "Unknown pet", expected: "404" },
+    { id: "TC03", endpoint: "GET /pets/{id}", type: "positive", title: "Get a pet", expected: "200 with a name" },
+  ] };
+const seeded = new DatabaseSync(join(dir, "qa.db"));
+const addRun = (status: string, result: unknown = null) => Number(seeded.prepare(`INSERT INTO runs (collection_name, environment_id, environment_label, kind, ai_mode, contract_id, status, result_json, created_at, started_at, finished_at)
+  VALUES ('Contract: Pet Store', 1, 'Test', 'ai', 'contract', ?, ?, ?, datetime('now'), datetime('now'), ?)`).run(contractId, status, result ? JSON.stringify(result) : null, status === "running" ? null : new Date().toISOString()).lastInsertRowid);
+const waiting = addRun("running");
+seeded.prepare("INSERT INTO run_events (run_id, seq, type, data_json, created_at) VALUES (?, 1, 'approval_request', ?, datetime('now'))").run(waiting, JSON.stringify({ id: 1, kind: "test_cases", plan }));
+const builtCollection = { info: { name: plan.collection_name, schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" }, item: plan.cases.map((c) => ({ name: `${c.id} ${c.title}`, request: { method: "GET", url: "{{baseUrl}}/pets" } })) };
+const finished = addRun("passed", { collections: [], report: "", contract: { name: "Pet Store", plan, review_rounds: 1, collection: builtCollection } });
+seeded.close();
+
+await check("Case review: drop one, edit one, add one; what's sent is exactly the edited cases", async () => {
+  let sent = "";
+  await page.route(`**/api/runs/${waiting}/approval`, async (route: any) => {
+    sent = JSON.parse(route.request().postData()).answer;
+    await route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' });
+  });
+  await page.goto(`${base}/runs/${waiting}`);
+  await page.getByText("Review the test cases").waitFor();
+  await page.getByText("404 has no body schema").waitFor();
+  await button("Approve all 3 cases").waitFor();
+  await page.getByLabel("Keep TC02").uncheck();
+  await page.getByRole("button", { name: /TC03/ }).click();
+  await page.getByLabel("Expected").fill("200 with a name and an id");
+  await button("Add a case").click();
+  await page.getByLabel("Title").last().fill("List pets with a negative limit");
+  await page.getByLabel("Expected").last().fill("400");
+  await button("Approve 3 cases with my changes").click();
+  await page.waitForTimeout(300);
+  const p = JSON.parse(sent);
+  if (JSON.stringify(p.cases.map((c: any) => c.id)) !== '["TC01","TC03","TC04"]') throw new Error(`cases sent: ${sent}`);
+  if (p.cases[1].expected !== "200 with a name and an id" || p.cases[2].title !== "List pets with a negative limit") throw new Error(`edits not sent: ${sent}`);
+  if (p.collection_name !== plan.collection_name) throw new Error("the plan's other fields were lost");
+  await page.unroute(`**/api/runs/${waiting}/approval`);
+});
+
+await check("Add to Postman: choose the workspace, then a folder in an existing collection, confirm", async () => {
+  await page.goto(`${base}/runs/${finished}`);
+  await button("Choose where to add it").click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Workspace").selectOption({ label: "Practice (personal)" });
+  await dialog.getByRole("radio", { name: /A folder in an existing collection/ }).check();
+  await dialog.getByRole("combobox", { name: "Collection", exact: true }).selectOption({ label: "Fake API tests (from Postman)" });
+  await dialog.getByLabel("Folder name").fill("Pets contract");
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  await dialog.getByText("Add 3 requests to the workspace Practice, as a new folder Pets contract in the collection Fake API tests (from Postman)?").waitFor();
+  if (pm.store.get("1-abc").item.some((i: any) => i.name === "Pets contract")) throw new Error("published before confirming");
+  await dialog.getByRole("button", { name: "Yes, add them" }).click();
+  await page.getByText("Added 3 requests to Practice → Fake API tests (from Postman) → Pets contract").waitFor();
+  const folder = pm.store.get("1-abc").item.find((i: any) => i.name === "Pets contract");
+  if (folder?.item?.length !== 3) throw new Error("the folder isn't in the collection");
+  await page.getByText(/Added 3 requests to Practice → folder Pets contract in collection Fake API tests/).waitFor();
+});
+
+await check("Contract page: lists its runs and where its tests are in Postman", async () => {
+  await page.goto(`${base}/contracts/${contractId}`);
+  await page.getByText("Practice → Fake API tests (from Postman) → Pets contract").waitFor();
+  await page.getByText(`#${finished} on Test`).waitFor();
+});
+
 await check("Schedules page lists the schedule", async () => {
   await page.goto(`${base}/schedules`);
   await page.getByText("Weekdays at 07:00").waitFor();
@@ -344,7 +447,7 @@ await check("Theme: switching to dark is applied and remembered", async () => {
 
 await check("Phone width: no page scrolls sideways", async () => {
   await page.setViewportSize({ width: 390, height: 844 });
-  for (const path of ["/", "/collections", "/collections/1", "/environments", "/environments/compare", "/runs", "/runs/1", "/runs/3", "/known-bugs", "/changes", "/schedules", "/audit", "/settings"]) {
+  for (const path of ["/", "/collections", "/collections/1", "/environments", "/environments/compare", "/runs", "/runs/1", "/runs/3", "/known-bugs", "/changes", "/schedules", "/audit", "/settings", "/contracts", "/contracts/1"]) {
     await page.goto(base + path);
     await page.waitForLoadState("networkidle");
     const width = await page.evaluate(() => document.documentElement.scrollWidth);

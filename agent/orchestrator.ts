@@ -7,6 +7,8 @@
 //
 // Build a new collection:   npx tsx orchestrator.ts [--env test|stg|prod] "what to test" [workspace id]
 // Re-check published ones:  npx tsx orchestrator.ts [--env test|stg|prod] --regression [collection uid ...]
+// Test an API contract:     npx tsx orchestrator.ts [--env test|stg|prod] --contract <contract.json>
+//   (written by the dashboard; nothing is published: the dashboard asks where it goes)
 //   (with no uids, regression checks every "(agent-built)" collection in the workspace)
 //
 // Exit codes: 0 finished, 2 server issues (5xx or unreachable), 3 circuit breaker tripped,
@@ -17,6 +19,7 @@ import { env, selectEnvironment } from "./config.ts";
 import { qaServer, printMessage, cleanupProbes, closeHuman, checkServerHealth, serverIssue, abortController, breakerState, runResults } from "./tools.ts";
 import { emit } from "./events.ts";
 import { writeFileSync } from "node:fs";
+import { loadContract } from "./contract.ts";
 
 const WORKSPACE_ID = "a4ac7a19-b10d-4f2d-8621-68f6b79122b5"; // "Practice Collection"
 
@@ -29,11 +32,23 @@ try {
   console.log(e.message);
   process.exit(1);
 }
-const mode: Mode = args[0] === "--regression" ? "regression" : "build";
+const mode: Mode = args[0] === "--regression" ? "regression" : args[0] === "--contract" ? "contract" : "build";
 if (mode === "regression") args.shift();
+if (mode === "contract") {
+  args.shift();
+  try {
+    const c = loadContract(args[0] ?? process.env.QA_CONTRACT_FILE ?? "");
+    console.log(`Contract: ${c.name} (${c.format === "openapi" ? `OpenAPI ${c.spec_version}, ${c.endpoints.length} endpoints` : "document"})`);
+  } catch (e: any) {
+    console.log(`Can't read the contract file: ${e.message}`);
+    process.exit(1);
+  }
+}
 
 const prompt =
-  mode === "regression"
+  mode === "contract"
+    ? "Test the API against its contract: start by asking the analyst for test cases."
+    : mode === "regression"
     ? args.length
       ? `Re-check these collections: ${args.join(", ")}`
       : `Re-check every collection whose name ends in "(agent-built)" in Postman workspace ${WORKSPACE_ID}. List them with postman_list_collections first.`

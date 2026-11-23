@@ -12,6 +12,7 @@
 //   - nothing is published unless every remaining failure is a marked KNOWN BUG
 import { tool, createSdkMcpServer, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { contractTools, coverage, currentContract, parsePlan, type PlanT } from "./contract.ts";
 import newman from "newman";
 import { appendFileSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -45,6 +46,8 @@ const state = {
   details: new Map<string, Detail>(), // full result of every request in the last run, for get_run_details
   dirty: false, // changed since the last run
   approved: false, // a human approved the plan
+  contractPlan: null as PlanT | null, // contract runs: the test cases as the human approved them
+  reviewRounds: 0,
   diagnoses: [] as Diagnosis[],
   heals: [] as string[], // human-readable record of every change, kept or reverted
   pending: [] as PendingChange[], // changes not yet proven by a run
@@ -361,11 +364,20 @@ export const runCollection = tool(
   "Make the given Postman collection (v2.1 JSON, as a string) the working collection and run it with Newman. Returns totals and details of failed requests only.",
   { collection_json: z.string().describe("The full Postman v2.1 collection as a JSON string") },
   async ({ collection_json }) => {
+    let parsed: any;
     try {
-      state.collection = JSON.parse(collection_json);
+      parsed = JSON.parse(collection_json);
     } catch (e) {
       return text(`Invalid JSON: ${e}`, true);
     }
+    // Contract runs: only the test cases the human approved, each as one request named after its id.
+    if (currentContract()) {
+      if (!state.contractPlan) return text("Refused: no human has approved the test cases yet.", true);
+      const { missing, extra } = coverage(state.contractPlan, parsed);
+      if (missing.length || extra.length)
+        return text(`Refused: the collection must have exactly one request per approved case, named after its id (e.g. "TC03 ...").${missing.length ? ` Missing: ${missing.join(", ")}.` : ""}${extra.length ? ` Not in the approved cases: ${extra.join(" | ")}.` : ""}`, true);
+    }
+    state.collection = parsed;
     state.source = null;
     return runResult(await runWorkingCollection());
   },
@@ -583,6 +595,40 @@ export const requestApproval = tool(
   },
 );
 
+// Contract runs: the human reviews the test cases and may edit them (keep, change, remove, add).
+export const requestCaseReview = tool(
+  "request_case_review",
+  "Show the contract test cases to the human and wait. Returns APPROVED with the exact plan to build (possibly edited by the human), or REJECTED with their feedback.",
+  { plan_json: z.string().describe("The analyst's plan, as JSON") },
+  async ({ plan_json }) => {
+    let plan: PlanT;
+    try {
+      plan = parsePlan(plan_json);
+    } catch (e: any) {
+      return text(`${e.message} Ask the analyst for a corrected plan.`, true);
+    }
+    state.reviewRounds++;
+    console.log(`\n========== TEST CASES FOR REVIEW (${plan.cases.length}) ==========\n${plan.cases.map((c) => `${c.id} [${c.type}] ${c.endpoint ?? ""} ${c.title} -> ${c.expected}`).join("\n")}\n=================================================`);
+    const answer = await askHuman("Approve these test cases? Type y to approve, the edited plan as JSON, or what to change: ", { kind: "test_cases", plan });
+    if (answer === null) return text("REJECTED: nobody answered, so nothing will be built.");
+    if (/^(y|yes)$/i.test(answer)) {
+      state.contractPlan = plan;
+    } else if (answer.trim().startsWith("{")) {
+      try {
+        state.contractPlan = parsePlan(answer);
+      } catch (e: any) {
+        return text(`REJECTED: the edited cases couldn't be read (${e.message}). Show the same plan again.`);
+      }
+      emit("cases_edited", { cases: state.contractPlan.cases.length });
+    } else {
+      return text(`REJECTED. Feedback from the human: ${answer}`);
+    }
+    state.approved = true;
+    emit("cases_approved", { cases: state.contractPlan.cases.length, edited: !/^(y|yes)$/i.test(answer) });
+    return text(`APPROVED. Give the builder exactly this plan (it is what the human approved${/^(y|yes)$/i.test(answer) ? "" : ", with their edits"}):\n${JSON.stringify(state.contractPlan)}`);
+  },
+);
+
 export const runStatus = tool(
   "run_status",
   "Summarise the working collection's state: the circuit breaker, the last run's failures split into known-bug repeats (no investigation needed) and failures that need diagnosis, known bugs that now pass, diagnoses so far, changes made by the healer, and whether it can be published.",
@@ -723,7 +769,8 @@ export const qaServer = (team = false) =>
     name: "qa",
     tools: team
       ? [searchKnowledge, runCollection, rerunCollection, getRunDetails, getRequest, sendRequest, recordDiagnosis, patchRequest,
-         requestApproval, runStatus, markKnownBugs, loadPublishedCollection, listCollections, publishCollection, updatePublishedCollection]
+         requestApproval, runStatus, markKnownBugs, loadPublishedCollection, listCollections, publishCollection, updatePublishedCollection,
+         ...(currentContract() ? [...contractTools, requestCaseReview] : [])]
       : [searchKnowledge, runCollection, listCollections, publishPassingCollection],
   });
 
@@ -760,6 +807,15 @@ export function runResults() {
     environment: { name: env().name, label: env().label, base_url: env().baseUrl },
     collections: [...state.finished, ...(state.collection && state.lastRun ? [collectionSummary()] : [])],
     server_issue: state.serverIssue,
+    // Contract runs: the approved cases and the collection, which the dashboard publishes where the person chooses.
+    ...(currentContract() && {
+      contract: {
+        name: currentContract()!.name,
+        plan: state.contractPlan,
+        review_rounds: state.reviewRounds,
+        collection: state.collection,
+      },
+    }),
     cost_usd: Number(totalCost.toFixed(4)),
     report: lastReport,
   };

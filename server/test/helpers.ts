@@ -50,20 +50,40 @@ export function fixtureCollection(opts: { failItems?: boolean; itemsName?: strin
   };
 }
 
-// The fake Postman API: checks the key, serves one workspace with one collection.
+// The fake Postman API: checks the key; one workspace with collections it really stores (create, read,
+// update), and one API spec in Spec Hub.
 export async function fakePostman() {
   const collection = { ...fixtureCollection(), info: { ...fixtureCollection().info, name: "Fake API tests (from Postman)" } };
-  const server = createServer((req, res) => {
+  const store = new Map<string, any>([["1-abc", collection]]);
+  const spec = { content: "openapi: 3.0.0\ninfo: { title: Spec Hub API, version: '1' }\npaths:\n  /ping:\n    get:\n      responses: { '201': { description: up } }\n" };
+  let made = 0;
+  const server = createServer(async (req, res) => {
     if (req.headers["x-api-key"] !== POSTMAN_KEY) return res.writeHead(401).end(JSON.stringify({ error: { name: "AuthenticationError" } }));
     const url = new URL(req.url!, "http://x");
-    const json = (body: any) => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
+    const json = (body: any, code = 200) => res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify(body));
+    let body = "";
+    for await (const c of req) body += c;
     if (url.pathname === "/me") return json({ user: { username: "tester" } });
     if (url.pathname === "/workspaces") return json({ workspaces: [{ id: "ws1", name: "Practice", type: "personal" }] });
-    if (url.pathname === "/collections" && url.searchParams.get("workspace") === "ws1") return json({ collections: [{ uid: "1-abc", name: collection.info.name }] });
-    if (url.pathname === "/collections/1-abc") return json({ collection });
+    if (url.pathname === "/collections" && req.method === "GET" && url.searchParams.get("workspace") === "ws1")
+      return json({ collections: [...store].map(([uid, c]) => ({ uid, name: c.info.name })) });
+    if (url.pathname === "/collections" && req.method === "POST") {
+      const c = JSON.parse(body).collection;
+      const uid = `1-new${++made}`;
+      store.set(uid, c);
+      return json({ collection: { uid, name: c.info.name } });
+    }
+    const m = url.pathname.match(/^\/collections\/([\w-]+)$/);
+    if (m && store.has(m[1])) {
+      if (req.method === "PUT") { store.set(m[1], JSON.parse(body).collection); return json({ collection: { uid: m[1] } }); }
+      return json({ collection: store.get(m[1]) });
+    }
+    if (url.pathname === "/specs" && url.searchParams.get("workspaceId") === "ws1") return json({ specs: [{ id: "spec1", name: "Spec Hub API", type: "OPENAPI:3.0" }], meta: { nextCursor: null } });
+    if (url.pathname === "/specs/spec1/files") return json({ files: [{ id: "f1", path: "index.yaml", type: "ROOT" }] });
+    if (url.pathname === "/specs/spec1/files/index.yaml") return json({ id: "f1", path: "index.yaml", content: spec.content });
     res.writeHead(404).end("{}");
   });
-  return { url: await listen(server), close: () => { server.closeAllConnections(); server.close(); } };
+  return { url: await listen(server), store, spec, close: () => { server.closeAllConnections(); server.close(); } };
 }
 
 // A fresh app with an in-memory database, pointed at the fake Postman.

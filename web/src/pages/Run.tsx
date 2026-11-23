@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router";
 import { api, type AiCollectionResult, type Execution, type Run, type RunEvent } from "../api.ts";
 import { Markdown } from "../markdown.tsx";
+import { CaseReview, ContractOutcome } from "../ContractRun.tsx";
 import { dateTime, duration, money } from "../format.ts";
 import { Button, Card, ErrorNote, Icon, KindBadge, Modal, Spinner, StatusBadge, inputClass, useToast } from "../ui.tsx";
 import { relativeTime } from "../format.ts";
@@ -111,6 +112,7 @@ function ApprovalCard({ run, request, answered }: { run: Run; request: RunEvent;
   const d = request.data;
   const isPlan = d.kind === "plan";
   if (answered || FINISHED.includes(run.status)) return null;
+  if (d.kind === "test_cases" && d.plan) return <CaseReview run={run} plan={d.plan} />;
   return (
     <section className="rounded-xl border-2 p-4" style={{ borderColor: "var(--status-warning)", background: "color-mix(in srgb, var(--status-warning) 8%, var(--card))" }}>
       <h2 className="flex items-center gap-2 font-semibold"><Icon name="alert" className="text-warning" />The agents are waiting for your approval</h2>
@@ -211,6 +213,7 @@ const EVENT_LOOK: Record<string, { icon: string; color?: string }> = {
   email_sent: { icon: "upload", color: "var(--status-good)" },
   email_failed: { icon: "alert", color: "var(--status-critical)" },
   updated: { icon: "upload", color: "var(--status-good)" },
+  cases_approved: { icon: "check", color: "var(--status-good)" },
 };
 
 // One line of an agent message, without Markdown markers.
@@ -230,8 +233,9 @@ function describe(e: RunEvent): React.ReactNode {
     case "change_reverted": return <>Undid the change to <span className="font-medium">{d.request}</span>: it didn't fix the test</>;
     case "known_bugs_marked": return <>Marked as known bugs: {(d.requests ?? []).join(", ")}</>;
     case "learned": return <>Saved to the knowledge base: <span className="text-ink-2">{d.title}</span></>;
-    case "approval_request": return <>Asked for approval{d.request ? ` (${d.request})` : ""}</>;
-    case "approval_answer": return <>Your answer: <span className="font-medium">{d.answer === "y" ? "approved" : d.answer ?? "no answer"}</span></>;
+    case "cases_approved": return <>You approved {d.cases} test case{d.cases === 1 ? "" : "s"}{d.edited ? ", with your changes" : ""}</>;
+    case "approval_request": return d.kind === "test_cases" ? <>Asked you to review {d.plan?.cases?.length ?? ""} test cases</> : <>Asked for approval{d.request ? ` (${d.request})` : ""}</>;
+    case "approval_answer": return <>Your answer: <span className="font-medium">{d.answer === "y" ? "approved" : String(d.answer ?? "").startsWith("{") ? "approved with your changes" : d.answer ?? "no answer"}</span></>;
     case "server_errors": return <>{d.summary}</>;
     case "server_issue": return <span className="font-medium">{d.message}</span>;
     case "circuit_breaker": return <>Circuit breaker tripped: {d.requests_needing_diagnosis} requests failing (trips at {d.trips_at})</>;
@@ -319,6 +323,7 @@ export function RunPage() {
             {r.duration_ms != null && ` · took ${duration(r.duration_ms)}`}{r.kind === "ai" && r.cost_usd != null && ` · AI cost ${money(r.cost_usd)}`}
           </p>
           {r.data_file && <p className="mt-1 flex items-center gap-1.5 text-xs text-muted"><Icon name="table" size={12} />Test data: {r.data_file.name}{executions && "data_file" in (result as any) ? `, ${(result as any).data_file.rows} rows, once per row` : ""}{r.data_file.id === null && " (since deleted)"}</p>}
+          {r.contract?.id && <p className="mt-1 flex items-center gap-1.5 text-xs text-muted"><Icon name="file" size={12} /><span>From the contract <Link to={`/contracts/${r.contract.id}`} className="text-accent hover:underline">{r.collection.name.replace(/^Contract: /, "")}</Link>{r.contract.endpoints ? `, ${r.contract.endpoints.length} chosen endpoint${r.contract.endpoints.length === 1 ? "" : "s"}` : ""}</span></p>}
           {r.schedule_id && <p className="mt-1 flex items-center gap-1.5 text-xs text-muted"><Icon name="clock" size={12} />Started by a <Link to="/schedules" className="text-accent hover:underline">schedule</Link>{r.kind === "ai" && ". Unattended: changes needing approval were refused"}</p>}
         </div>
         <div className="flex flex-wrap gap-2">
@@ -366,6 +371,7 @@ export function RunPage() {
           </Card>
         ) : (
           <>
+            {r.ai_mode === "contract" && !going && <ContractOutcome run={r} />}
             {result && "collections" in result && result.report && <Card title="Report from the agents"><div className="px-4 py-3"><Markdown text={result.report} /></div></Card>}
             {result && "collections" in result && result.collections.map((c, i) => <AiResult key={i} c={c} />)}
             <Card title={going ? <span className="flex items-center gap-2">What the agents are doing <Spinner size={12} /></span> : "What the agents did"}

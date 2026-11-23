@@ -166,6 +166,46 @@ const migrations: string[] = [
   CREATE INDEX audit_by_time ON audit_log(at);
   CREATE INDEX audit_by_action ON audit_log(action, at);
   `,
+  // 6: API contracts - the Contract Analyst agent turns them into test cases and a collection
+  `
+  CREATE TABLE contracts (
+    id               INTEGER PRIMARY KEY,
+    name             TEXT NOT NULL,
+    source_kind      TEXT NOT NULL CHECK (source_kind IN ('file', 'url', 'postman')),
+    source_ref       TEXT,                     -- the URL, or "<workspace id>/<spec id>" for Postman
+    filename         TEXT,
+    format           TEXT NOT NULL CHECK (format IN ('openapi', 'document')),
+    spec_version     TEXT,
+    title            TEXT NOT NULL,
+    api_version      TEXT,
+    servers          TEXT NOT NULL DEFAULT '[]',
+    endpoints        TEXT NOT NULL DEFAULT '[]', -- JSON; for documents, filled in from the agent's analysis
+    warnings         TEXT NOT NULL DEFAULT '[]',
+    original         BLOB NOT NULL,            -- the file as received
+    text             TEXT,                     -- documents: the readable text
+    hash             TEXT NOT NULL,
+    last_changes     TEXT,                     -- JSON: what changed at the last refresh
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    checked_at       TEXT
+  );
+
+  CREATE TABLE contract_publications (
+    id              INTEGER PRIMARY KEY,
+    contract_id     INTEGER REFERENCES contracts(id) ON DELETE SET NULL,
+    run_id          INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+    workspace_id    TEXT NOT NULL,
+    workspace_name  TEXT,
+    collection_uid  TEXT NOT NULL,
+    collection_name TEXT NOT NULL,
+    folder_name     TEXT,                      -- set when added as a folder of an existing collection
+    requests        INTEGER NOT NULL,
+    published_at    TEXT NOT NULL
+  );
+
+  ALTER TABLE runs ADD COLUMN contract_id INTEGER REFERENCES contracts(id) ON DELETE SET NULL;
+  ALTER TABLE runs ADD COLUMN contract_endpoints TEXT;   -- JSON array of the endpoint keys chosen (null: all)
+  `,
 ];
 
 export function openDb(path = process.env.QA_DB ?? fileURLToPath(new URL("../data/qa.db", import.meta.url))): DB {

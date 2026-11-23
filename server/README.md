@@ -95,6 +95,14 @@ Every run uses the environment's `base_url` as `{{baseUrl}}`, and its variables 
 
 **Runs at the same time**: `PUT /api/settings/runs` `{ "max_parallel": 1-8 }` (default 2). Two runs of the same collection on the same environment never run together.
 
+**Contracts** (an API contract the Contract Analyst agent turns into tests)
+- `POST /api/contracts/upload` `{ "filename", "content_base64", "name"? }`: OpenAPI 3 or Swagger 2 (JSON or YAML), or a document: PDF, Word (.docx), Markdown, text, HTML. Up to 10 MB. Old `.doc` files and scanned PDFs without text are refused with a reason.
+- `POST /api/contracts/url` `{ "url", "name"? }`, `POST /api/contracts/postman` `{ "workspace_id", "spec_id", "name"? }` (specs: `GET /api/postman/workspaces/:id/specs`).
+- `GET /api/contracts`, `GET /api/contracts/:id` (endpoints, warnings, runs, where it was published), `PATCH` (rename), `DELETE`, `GET /api/contracts/:id/source` (the original file).
+- `POST /api/contracts/:id/refresh` (links and Postman specs): `{ changed, changes: { added, removed, changed } }`.
+- Start a run: `POST /api/runs` `{ "kind": "ai", "ai_mode": "contract", "contract_id", "environment_id", "endpoints"?: ["GET /pets"], "request"?: "what to focus on" }`. The cases are reviewed on the run (approval kind `test_cases`; answer `y`, the edited plan as JSON, or feedback).
+- Publish what it built, where the person chose: `POST /api/runs/:id/publish` `{ "workspace_id", "target": { "kind": "new", "name" } | { "kind": "folder", "collection_uid", "folder_name", "replace" } }`. Refused unless the run passed (failures only in known bugs). Folders: `GET /api/postman/collections/:uid/folders`. Published collections are imported into the dashboard too.
+
 **Run statuses:** `queued`, `running`, `passed`, `passed_with_known_bugs` (the only failures are in `KNOWN BUG` requests), `failed`, `server_issue` ("Facing server issues, please check <Env> Env"), `circuit_breaker`, `error`, `cancelled`.
 
 Plain runs use the same server-issue rule as the agents: a failing health check, or at least 80% of requests (and at least 3) getting server errors. A single 5xx is an ordinary failure.

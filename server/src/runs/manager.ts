@@ -13,7 +13,9 @@ export type RunRow = {
   collection_name: string;
   environment_label: string;
   kind: "plain" | "ai";
-  ai_mode: "regression" | "build" | null;
+  ai_mode: "regression" | "build" | "contract" | null;
+  contract_id: number | null;
+  contract_endpoints: string | null; // JSON array, or null for all
   request: string | null;
   workspace_id: string | null;
   schedule_id: number | null;
@@ -100,7 +102,7 @@ export class RunManager {
       const run = this.db.prepare("SELECT * FROM runs WHERE id = ?").get(runId) as any as RunRow | undefined;
       if (!run || run.status !== "queued") { this.queue.splice(i, 1); continue; }
       // A build run makes a new collection, so it never clashes.
-      const key = run.collection_id ? `${run.collection_id}:${run.environment_id}` : `run:${runId}`;
+      const key = run.collection_id ? `${run.collection_id}:${run.environment_id}` : run.contract_id ? `contract:${run.contract_id}:${run.environment_id}` : `run:${runId}`;
       if ([...this.running.values()].includes(key)) { i++; continue; }
       this.queue.splice(i, 1);
       this.running.set(runId, key);

@@ -9,6 +9,7 @@ const view = (r: any, withResult = false) => ({
   id: r.id, kind: r.kind, ai_mode: r.ai_mode ?? null, request: r.request ?? null, status: r.status, message: r.message,
   schedule_id: r.schedule_id ?? null, unattended: !!r.unattended,
   data_file: r.data_file_name ? { id: r.data_file_id ?? null, name: r.data_file_name } : null,
+  contract: r.ai_mode === "contract" ? { id: r.contract_id ?? null, endpoints: r.contract_endpoints ? JSON.parse(r.contract_endpoints) : null } : null,
   collection: { id: r.collection_id, name: r.collection_name },
   environment: { id: r.environment_id, label: r.environment_label },
   requests: r.requests, assertions: r.assertions, failed_assertions: r.failed_assertions,
@@ -35,11 +36,14 @@ export function runsRoutes(app: FastifyInstance, db: DB, runs: RunManager) {
   };
 
   app.post("/api/runs", async (req, reply) => {
-    // Three kinds of run: plain (Newman), AI regression (re-check a collection), AI build (create a collection).
+    // Four kinds of run: plain (Newman), AI regression (re-check a collection), AI build (create a collection),
+    // and AI contract (test cases and a collection from an API contract; published later, where the person chooses).
     const body = z.object({
       environment_id: z.number().int(),
       kind: z.enum(["plain", "ai"]).default("plain"),
-      ai_mode: z.enum(["regression", "build"]).default("regression"),
+      ai_mode: z.enum(["regression", "build", "contract"]).default("regression"),
+      contract_id: z.number().int().optional(),
+      endpoints: z.array(z.string()).max(500).optional(), // contract runs: which endpoints (all if left out)
       collection_id: z.number().int().optional(),
       request: z.string().trim().max(2000).optional(),
       workspace_id: z.string().trim().min(1).optional(),
@@ -48,9 +52,22 @@ export function runsRoutes(app: FastifyInstance, db: DB, runs: RunManager) {
     const e = db.prepare("SELECT id, label FROM environments WHERE id = ?").get(body.environment_id) as any;
     if (!e) throw new HttpError(404, "Environment not found.");
     const build = body.kind === "ai" && body.ai_mode === "build";
+    const contractRun = body.kind === "ai" && body.ai_mode === "contract";
 
     let collection: { id: number | null; name: string };
-    if (build) {
+    let contract: { id: number; endpoints: string[] | null } | null = null;
+    if (contractRun) {
+      if (!body.contract_id) throw new HttpError(400, "Choose the contract to generate tests from.");
+      const c = db.prepare("SELECT id, name, format, endpoints FROM contracts WHERE id = ?").get(body.contract_id) as any;
+      if (!c) throw new HttpError(404, "Contract not found.");
+      const known = new Set((JSON.parse(c.endpoints) as any[]).map((x) => x.key));
+      const chosen = body.endpoints?.length ? [...new Set(body.endpoints)] : null;
+      // For a spec the endpoints are known; for a document the agent finds them, so any choice is a hint.
+      const unknown = c.format === "openapi" ? (chosen ?? []).filter((k) => !known.has(k)) : [];
+      if (unknown.length) throw new HttpError(400, `Not in the contract: ${unknown.slice(0, 5).join(", ")}`);
+      contract = { id: c.id, endpoints: chosen };
+      collection = { id: null, name: `Contract: ${c.name}` };
+    } else if (build) {
       if (!body.request || body.request.length < 15) throw new HttpError(400, "Describe what to test in a sentence or two (at least 15 characters).");
       if (!body.workspace_id) throw new HttpError(400, "Choose the Postman workspace to publish the new collection to.");
       if (body.collection_id) throw new HttpError(400, "A build run creates a new collection; don't pass a collection_id.");
@@ -65,10 +82,11 @@ export function runsRoutes(app: FastifyInstance, db: DB, runs: RunManager) {
       collection = { id: c.id, name: c.name };
     }
     const dataFile = body.data_file_id ? checkDataFile(db, body.data_file_id, body.kind, collection.id) : null;
-    const id = Number(db.prepare(`INSERT INTO runs (collection_id, environment_id, collection_name, environment_label, kind, ai_mode, request, workspace_id, data_file_id, data_file_name, status, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`)
-      .run(collection.id, e.id, collection.name, e.label, body.kind, body.kind === "ai" ? body.ai_mode : null, build ? body.request! : null, build ? body.workspace_id! : null,
-        dataFile?.id ?? null, dataFile?.name ?? null, now()).lastInsertRowid);
+    const id = Number(db.prepare(`INSERT INTO runs (collection_id, environment_id, collection_name, environment_label, kind, ai_mode, request, workspace_id, data_file_id, data_file_name, contract_id, contract_endpoints, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`)
+      .run(collection.id, e.id, collection.name, e.label, body.kind, body.kind === "ai" ? body.ai_mode : null,
+        build || contractRun ? body.request ?? null : null, build ? body.workspace_id! : null,
+        dataFile?.id ?? null, dataFile?.name ?? null, contract?.id ?? null, contract?.endpoints ? JSON.stringify(contract.endpoints) : null, now()).lastInsertRowid);
     runs.addEvent(id, "status", { status: "queued" });
     runs.enqueue(id);
     reply.code(202);

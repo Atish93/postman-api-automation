@@ -1,0 +1,254 @@
+// Contract runs on the run page: reviewing the analyst's test cases (keep, edit, remove, add, or send
+// back), what was approved, and adding the result to the Postman workspace and collection you choose.
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router";
+import { api, type ContractCase, type ContractPlan, type Run } from "./api.ts";
+import { dateTime } from "./format.ts";
+import { Button, Card, ErrorNote, Field, Icon, Modal, Spinner, inputClass, useToast } from "./ui.tsx";
+
+const TYPES = ["setup", "positive", "negative", "security", "edge", "cleanup"];
+const TYPE_COLOR: Record<string, string> = { positive: "var(--status-good)", negative: "var(--status-critical)", security: "var(--status-serious)", edge: "var(--status-warning)" };
+
+type Row = ContractCase & { keep: boolean; added?: boolean };
+const same = (a: ContractCase, b: ContractCase) => a.title === b.title && a.expected === b.expected && a.type === b.type && (a.endpoint ?? "") === (b.endpoint ?? "") && (a.request ?? "") === (b.request ?? "");
+
+function PlanFacts({ plan }: { plan: ContractPlan }) {
+  return (
+    <div className="space-y-2 text-sm">
+      {plan.summary && <p>{plan.summary}</p>}
+      {plan.auth && <p><span className="text-ink-2">Authentication: </span>{plan.auth}</p>}
+      {!!plan.gaps?.length && (
+        <div>
+          <div className="flex items-center gap-1.5 text-xs font-medium text-warn-ink"><Icon name="alert" size={12} />Where the contract is silent or unclear (not tested)</div>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-ink-2">{plan.gaps.map((g, i) => <li key={i}>{g}</li>)}</ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The first approval: the test cases.
+export function CaseReview({ run, plan }: { run: Run; plan: ContractPlan }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [rows, setRows] = useState<Row[]>(() => plan.cases.map((c) => ({ ...c, keep: true })));
+  const [open, setOpen] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState("");
+  useEffect(() => setRows(plan.cases.map((c) => ({ ...c, keep: true }))), [plan]);
+  const original = useMemo(() => new Map(plan.cases.map((c) => [c.id, c])), [plan]);
+  const kept = rows.filter((r) => r.keep);
+  const edited = rows.some((r) => !r.keep || r.added || !same(r, original.get(r.id)!));
+  const answer = useMutation({
+    mutationFn: (text: string) => api.answerApproval(run.id, text),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["runs", run.id] }),
+    onError: (e) => toast("error", e.message),
+  });
+  const approve = () => {
+    if (!edited) return answer.mutate("y");
+    const cases = kept.map(({ keep: _k, added: _a, ...c }) => c);
+    answer.mutate(JSON.stringify({ ...plan, cases }));
+  };
+  const set = (id: string, patch: Partial<Row>) => setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const addCase = () => {
+    const next = Math.max(0, ...rows.map((r) => Number(r.id.slice(2)) || 0)) + 1;
+    const id = `TC${String(next).padStart(2, "0")}`;
+    setRows((rs) => [...rs, { id, type: "negative", endpoint: rs[rs.length - 1]?.endpoint ?? "", title: "", expected: "", keep: true, added: true }]);
+    setOpen(id);
+  };
+  const invalid = kept.some((r) => !r.title.trim() || !r.expected.trim());
+  const endpoints = [...new Set(rows.map((r) => r.endpoint || "Other"))];
+
+  return (
+    <section className="rounded-xl border-2 p-4" style={{ borderColor: "var(--status-warning)", background: "color-mix(in srgb, var(--status-warning) 6%, var(--card))" }}>
+      <h2 className="flex items-center gap-2 font-semibold"><Icon name="alert" className="text-warning" />Review the test cases</h2>
+      <p className="mt-1 text-sm text-ink-2">The Contract Analyst wrote {plan.cases.length} cases for <strong className="text-ink">{plan.collection_name}</strong>. Untick a case to drop it, open one to edit it, or add your own. Nothing is built until you approve.</p>
+      <div className="mt-3"><PlanFacts plan={plan} /></div>
+
+      <div className="mt-4 space-y-3">
+        {endpoints.map((ep) => (
+          <div key={ep}>
+            <div className="mb-1 font-mono text-xs text-ink-2">{ep}</div>
+            <ul className="divide-y divide-line overflow-hidden rounded-lg bg-card ring-1 ring-line">
+              {rows.filter((r) => (r.endpoint || "Other") === ep).map((r) => (
+                <li key={r.id} className={r.keep ? "" : "opacity-50"}>
+                  <div className="flex items-start gap-3 px-3 py-2">
+                    <input type="checkbox" className="mt-1 accent-[var(--accent)]" checked={r.keep} onChange={(e) => set(r.id, { keep: e.target.checked })} aria-label={`Keep ${r.id}`} />
+                    <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setOpen(open === r.id ? null : r.id)} aria-expanded={open === r.id}>
+                      <span className="flex flex-wrap items-center gap-x-2 text-sm">
+                        <span className="font-mono text-xs text-muted">{r.id}</span>
+                        <span className="inline-flex items-center gap-1 text-xs text-ink-2"><span className="inline-block size-2 rounded-full" style={{ background: TYPE_COLOR[r.type] ?? "var(--muted)" }} />{r.type}</span>
+                        <span className={r.keep ? "" : "line-through"}>{r.title || <span className="text-muted">(new case)</span>}</span>
+                        {(r.added || (original.get(r.id) && !same(r, original.get(r.id)!))) && <span className="rounded bg-raised px-1 text-[11px] text-accent ring-1 ring-line">{r.added ? "added" : "edited"}</span>}
+                      </span>
+                      <span className="block text-xs text-ink-2">Expect: {r.expected || <span className="text-muted">…</span>}</span>
+                    </button>
+                    <Icon name="chevron" className={`mt-1 shrink-0 text-muted transition ${open === r.id ? "rotate-90" : ""}`} />
+                  </div>
+                  {open === r.id && (
+                    <div className="grid gap-3 border-t border-line bg-page px-3 py-3 sm:grid-cols-2">
+                      <Field label="Title"><input className={inputClass} value={r.title} onChange={(e) => set(r.id, { title: e.target.value })} /></Field>
+                      <Field label="Kind"><select className={inputClass} value={r.type} onChange={(e) => set(r.id, { type: e.target.value })}>{TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
+                      <Field label="Endpoint"><input className={`${inputClass} font-mono`} value={r.endpoint ?? ""} onChange={(e) => set(r.id, { endpoint: e.target.value })} placeholder="POST /orders" /></Field>
+                      <Field label="Request"><input className={inputClass} value={r.request ?? ""} onChange={(e) => set(r.id, { request: e.target.value })} placeholder="what to send" /></Field>
+                      <div className="sm:col-span-2"><Field label="Expected"><textarea className={inputClass} rows={2} value={r.expected} onChange={(e) => set(r.id, { expected: e.target.value })} placeholder="status and what the response must show" /></Field></div>
+                      {r.contract_ref && <p className="text-xs text-muted sm:col-span-2">From the contract: {r.contract_ref}</p>}
+                      {r.added && <div className="sm:col-span-2"><Button size="sm" variant="ghost" icon="trash" onClick={() => setRows((rs) => rs.filter((x) => x.id !== r.id))}>Remove this new case</Button></div>}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start">
+        <Button variant="primary" icon="check" disabled={!kept.length || invalid} busy={answer.isPending && !answer.variables?.startsWith("Please")} onClick={approve}>
+          {edited ? `Approve ${kept.length} case${kept.length === 1 ? "" : "s"} with my changes` : `Approve all ${kept.length} cases`}
+        </Button>
+        <Button icon="plus" onClick={addCase}>Add a case</Button>
+      </div>
+      {invalid && <p className="mt-2 text-xs text-bad-ink">Every case needs a title and an expected result.</p>}
+      <div className="mt-4 border-t border-line pt-3">
+        <Field label="Or send them back to the analyst" hint="Say what to change; it writes a new set and you review again.">
+          <textarea className={inputClass} rows={2} value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="e.g. Add boundary cases for quantity, and drop the admin endpoints" />
+        </Field>
+        <Button className="mt-2" icon="x" disabled={!feedback.trim()} busy={answer.isPending && answer.variables === feedback.trim()} onClick={() => answer.mutate(feedback.trim())}>Send back with feedback</Button>
+      </div>
+    </section>
+  );
+}
+
+// After the run: what was approved, and where it went (or a button to choose).
+export function ContractOutcome({ run }: { run: Run }) {
+  const result = run.result && "collections" in run.result ? run.result : null;
+  const c = result?.contract;
+  const pubs = useQuery({ queryKey: ["run-publications", run.id], queryFn: () => api.runPublications(run.id) });
+  const [publishing, setPublishing] = useState(false);
+  if (!c) return null;
+  const built = c.collection;
+  const publishable = ["passed", "passed_with_known_bugs"].includes(run.status) && !!built?.item?.length;
+  return (
+    <>
+      <Card title="Add to Postman">
+        <div className="space-y-3 p-4 text-sm">
+          {pubs.data?.map((p) => (
+            <p key={p.id} className="flex items-start gap-2"><Icon name="check" className="mt-0.5 shrink-0 text-good" />
+              <span>Added {p.requests} requests to <strong>{p.workspace_name ?? p.workspace_id}</strong> → {p.folder_name ? <>folder <strong>{p.folder_name}</strong> in </> : null}collection <strong>{p.collection_name}</strong> <span className="text-xs text-muted">({dateTime(p.published_at)})</span></span></p>
+          ))}
+          {run.collection.id && <p><Link to={`/collections/${run.collection.id}`} className="text-accent hover:underline">Open it in Collections</Link> to run, schedule and email it like any other.</p>}
+          {publishable ? (
+            <>
+              {!pubs.data?.length && <p className="text-ink-2">The collection is built and checked{run.status === "passed_with_known_bugs" ? "; its only failures are contract violations marked as known bugs" : ""}. Nothing is in Postman yet: choose where it goes.</p>}
+              <Button variant={pubs.data?.length ? "secondary" : "primary"} icon="upload" onClick={() => setPublishing(true)}>{pubs.data?.length ? "Add it somewhere else too" : "Choose where to add it"}</Button>
+            </>
+          ) : (
+            <p className="flex items-start gap-2 text-ink-2"><Icon name="alert" className="mt-0.5 shrink-0 text-warn-ink" />
+              {!built?.item?.length ? "No collection was built in this run." : "It can't be added to Postman: some failures aren't explained (not test mistakes the self-healer fixed, nor contract violations marked as known bugs). Check the report above, fix the environment or the contract, and generate the tests again."}</p>
+          )}
+        </div>
+      </Card>
+      {c.plan && (
+        <Card title={`Test cases (${c.plan.cases.length}${c.review_rounds > 1 ? `, after ${c.review_rounds} reviews` : ""})`}>
+          <div className="space-y-3 p-4">
+            <PlanFacts plan={c.plan} />
+            <ul className="divide-y divide-line text-sm">{c.plan.cases.map((x) => (
+              <li key={x.id} className="py-1.5"><span className="font-mono text-xs text-muted">{x.id}</span> <span className="text-xs text-ink-2">{x.type} · {x.endpoint}</span><div>{x.title} <span className="text-ink-2">→ {x.expected}</span></div></li>
+            ))}</ul>
+          </div>
+        </Card>
+      )}
+      {publishing && <PublishDialog run={run} defaultName={c.plan?.collection_name ?? `${c.name} Contract Tests`} contractName={c.name} requests={countRequests(built?.item)} onClose={() => setPublishing(false)} />}
+    </>
+  );
+}
+
+const countRequests = (items: any[] = []): number => items.reduce((n, i) => n + (Array.isArray(i.item) ? countRequests(i.item) : 1), 0);
+
+// The second approval: which workspace, and a new collection or a folder in an existing one.
+function PublishDialog({ run, defaultName, contractName, requests, onClose }: { run: Run; defaultName: string; contractName: string; requests: number; onClose: () => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const workspaces = useQuery({ queryKey: ["workspaces"], queryFn: api.workspaces });
+  const [ws, setWs] = useState("");
+  const [mode, setMode] = useState<"new" | "folder">("new");
+  const [name, setName] = useState(defaultName);
+  const [colUid, setColUid] = useState("");
+  const [folder, setFolder] = useState(`${contractName} contract tests`);
+  const [replace, setReplace] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const chosenWs = ws || workspaces.data?.[0]?.id || "";
+  const wsName = workspaces.data?.find((w) => w.id === chosenWs)?.name ?? "";
+  const collections = useQuery({ queryKey: ["workspace-collections", chosenWs], queryFn: () => api.workspaceCollections(chosenWs), enabled: !!chosenWs });
+  const chosenCol = colUid || collections.data?.[0]?.uid || "";
+  const colName = collections.data?.find((c) => c.uid === chosenCol)?.name ?? "";
+  const folders = useQuery({ queryKey: ["collection-folders", chosenCol], queryFn: () => api.collectionFolders(chosenCol), enabled: mode === "folder" && !!chosenCol });
+  const nameTaken = mode === "new" && !!collections.data?.some((c) => c.name === name.trim());
+  const folderTaken = mode === "folder" && !!folders.data?.some((f) => f.name === folder.trim());
+  const ready = !!chosenWs && (mode === "new" ? !!name.trim() && !nameTaken : !!chosenCol && !!folder.trim() && (!folderTaken || replace));
+
+  const publish = useMutation({
+    mutationFn: () => api.publishRun(run.id, chosenWs, mode === "new" ? { kind: "new", name: name.trim() } : { kind: "folder", collection_uid: chosenCol, folder_name: folder.trim(), replace }),
+    onSuccess: (r) => {
+      toast("ok", `Added ${r.requests} requests to ${r.workspace.name} → ${r.folder ? `${r.collection.name} → ${r.folder}` : r.collection.name}`);
+      for (const k of [["run-publications", run.id], ["runs", run.id], ["contracts"], ["collections"], ["workspace-collections"]]) qc.invalidateQueries({ queryKey: k });
+      onClose();
+    },
+    onError: () => setConfirming(false),
+  });
+  const where = mode === "new" ? <>a new collection <strong>{name.trim()}</strong></> : <>{folderTaken ? "replace the folder" : "a new folder"} <strong>{folder.trim()}</strong> in the collection <strong>{colName}</strong></>;
+
+  return (
+    <Modal open onClose={onClose} title="Add the tests to Postman"
+      footer={confirming ? <>
+        <Button variant="ghost" onClick={() => setConfirming(false)}>Back</Button>
+        <Button variant="primary" icon="upload" busy={publish.isPending} onClick={() => publish.mutate()}>Yes, add them</Button>
+      </> : <>
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button variant="primary" disabled={!ready} onClick={() => setConfirming(true)}>Continue</Button>
+      </>}>
+      {workspaces.isPending ? <div className="py-6 text-center text-muted"><Spinner /></div> : workspaces.error ? <ErrorNote error={workspaces.error} /> : confirming ? (
+        <div className="space-y-3 text-sm">
+          <p>Add <strong>{requests} requests</strong> to the workspace <strong>{wsName}</strong>, as {where}?</p>
+          {mode === "folder" && folderTaken && <p className="flex gap-2 text-warn-ink"><Icon name="alert" className="mt-0.5 shrink-0" />The folder's current requests will be replaced.</p>}
+          <p className="text-ink-2">It's also added to the dashboard's Collections, so you can run, schedule and email it.</p>
+          <ErrorNote error={publish.error} />
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <Field label="Workspace">
+            <select className={inputClass} value={chosenWs} onChange={(e) => { setWs(e.target.value); setColUid(""); }}>{workspaces.data?.map((w) => <option key={w.id} value={w.id}>{w.name} ({w.type})</option>)}</select>
+          </Field>
+          <fieldset className="space-y-2">
+            <legend className="mb-1 text-sm font-medium">Where in the workspace</legend>
+            {([["new", "A new collection", "Its own collection, named below."], ["folder", "A folder in an existing collection", "Next to the requests already there, e.g. the API's main collection."]] as const).map(([v, t, d]) => (
+              <label key={v} className={`flex cursor-pointer gap-3 rounded-lg border p-3 ${mode === v ? "border-accent bg-raised" : "border-line hover:bg-raised"}`}>
+                <input type="radio" name="where" className="mt-1 accent-[var(--accent)]" checked={mode === v} onChange={() => setMode(v)} />
+                <span><span className="block text-sm font-medium">{t}</span><span className="block text-xs text-ink-2">{d}</span></span>
+              </label>
+            ))}
+          </fieldset>
+          {mode === "new" ? (
+            <Field label="Collection name" error={nameTaken ? "This workspace already has a collection with that name." : undefined}>
+              <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
+            </Field>
+          ) : collections.data?.length === 0 ? <p className="text-sm text-ink-2">This workspace has no collections yet: add the tests as a new collection.</p> : (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Collection">
+                <select className={inputClass} value={chosenCol} onChange={(e) => setColUid(e.target.value)}>{collections.data?.map((c) => <option key={c.uid} value={c.uid}>{c.name}</option>)}</select>
+              </Field>
+              <Field label="Folder name" hint={folders.data ? `${folders.data.length} folder${folders.data.length === 1 ? "" : "s"} there now` : undefined}>
+                <input className={inputClass} value={folder} onChange={(e) => setFolder(e.target.value)} />
+              </Field>
+              {folderTaken && (
+                <label className="flex items-start gap-2 text-sm sm:col-span-2"><input type="checkbox" className="mt-0.5 accent-[var(--accent)]" checked={replace} onChange={(e) => setReplace(e.target.checked)} />
+                  <span>A folder with this name exists: replace it<span className="block text-xs text-ink-2">Or change the name to add a new folder.</span></span></label>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}

@@ -37,6 +37,7 @@ const paths: Record<string, ReactNode> = {
   minus: <path d="M5 10h10" />,
   equal: <path d="M5 8h10M5 12h10" />,
   shield: <path d="M10 2.5l6 2.5v4.5c0 3.8-2.6 6.6-6 8-3.4-1.4-6-4.2-6-8V5l6-2.5z" />,
+  file: <><path d="M5 3h7l3 3v11H5V3z" /><path d="M12 3v3h3M8 10h4M8 13h4" /></>,
   logout: <><path d="M8 4H5a1 1 0 00-1 1v10a1 1 0 001 1h3" /><path d="M12 6.5l3.5 3.5-3.5 3.5M15.5 10H8" /></>,
 };
 export function Icon({ name, size = 16, className = "" }: { name: keyof typeof paths | string; size?: number; className?: string }) {
@@ -84,9 +85,9 @@ export function StatusBadge({ status }: { status: RunStatus }) {
   );
 }
 
-export function KindBadge({ kind, mode }: { kind: "plain" | "ai"; mode?: "regression" | "build" | null }) {
+export function KindBadge({ kind, mode }: { kind: "plain" | "ai"; mode?: "regression" | "build" | "contract" | null }) {
   return kind === "ai" ? (
-    <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-line px-1.5 py-0.5 text-xs text-ink-2"><Icon name="sparkle" size={12} className="text-accent" />{mode === "build" ? "AI build" : "AI"}</span>
+    <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-line px-1.5 py-0.5 text-xs text-ink-2"><Icon name="sparkle" size={12} className="text-accent" />{mode === "build" ? "AI build" : mode === "contract" ? "AI contract" : "AI"}</span>
   ) : (
     <span className="inline-flex items-center rounded-md border border-line px-1.5 py-0.5 text-xs text-ink-2">Plain</span>
   );

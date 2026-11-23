@@ -20,12 +20,17 @@ export function keyHint(key: string | null) {
   return key ? `…${key.slice(-4)}` : null;
 }
 
-export async function postman(db: DB, path: string) {
+export async function postman(db: DB, path: string, init: { method?: string; body?: unknown } = {}) {
   const key = postmanKey(db);
   if (!key) throw new HttpError(400, "Postman is not connected. Save your Postman API key in settings first.");
   let res: Response;
   try {
-    res = await fetch(`${base()}${path}`, { headers: { "X-Api-Key": key }, signal: AbortSignal.timeout(30_000) });
+    res = await fetch(`${base()}${path}`, {
+      method: init.method ?? "GET",
+      headers: { "X-Api-Key": key, ...(init.body !== undefined && { "content-type": "application/json" }) },
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+      signal: AbortSignal.timeout(60_000),
+    });
   } catch (e: any) {
     throw new HttpError(502, `Could not reach Postman: ${e.cause?.code ?? e.message}`);
   }

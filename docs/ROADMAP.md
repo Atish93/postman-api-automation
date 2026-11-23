@@ -32,6 +32,7 @@ A web dashboard around the agent team in `agent/`: connect Postman collections, 
 | 4 | Email reports (summary + HTML report + link) and schedules | **Done** |
 | 5 | Data across environments: encrypted secrets, compare, copy values, test-data files | **Done** |
 | 6 | Hardening: login, parallel runs, Docker, deployment, backups, audit log | **Done** |
+| 7 | Contract testing: test cases from an API contract, reviewed by you, published where you choose | **Done** |
 
 ### 0. Engine (done)
 - `QA_EVENTS=1`: one `@@event {json}` line per event on stdout.
@@ -88,3 +89,12 @@ Decided: one admin password (no roles), SQLite kept (no Postgres), a shared serv
 5. Docker image (non-root, health check, one data volume, including what the agents learn), docker-compose with Caddy for HTTPS, a systemd unit, and the deployment guide.
 
 Later, if the dashboard grows to a team: user accounts with roles, and Postgres.
+
+### 7. Contract testing (done)
+A separate feature: **Contracts** in the navigation.
+
+1. Contracts from an OpenAPI 3 / Swagger 2 file (JSON or YAML), a link, a spec in Postman's Spec Hub, or documentation (PDF, Word .docx, Markdown, text, HTML). Specs are parsed into endpoints; documents are kept as text and the agent finds the endpoints. Links and Postman specs can be checked for changes (endpoints added, removed or changed).
+2. A new agent, the **Contract Analyst**, writes test cases from the contract (positive, negative, security, edge, with setup and cleanup), each tied to what the contract says, and lists the gaps where the contract is silent.
+3. First approval: you review the cases in the dashboard (keep, edit, remove, add, or send back with feedback).
+4. The builder, debugger and self-healer build and check the collection on an environment; contract violations become known bugs.
+5. Second approval: you choose the Postman workspace, then a new collection or a folder in an existing one, and confirm. It's then also in the dashboard's Collections.

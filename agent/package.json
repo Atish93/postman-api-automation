@@ -10,7 +10,8 @@
     "regression": "tsx orchestrator.ts --regression",
     "drill": "tsx tests/outage-drill.ts",
     "typecheck": "tsc",
-    "check:events": "tsx tests/check-events.ts"
+    "check:events": "tsx tests/check-events.ts",
+    "check:contract": "tsx tests/check-contract.ts"
   },
   "keywords": [],
   "author": "",

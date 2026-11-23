@@ -23,6 +23,7 @@ import { authRoutes } from "./auth.ts";
 import { auditHooks, auditRoutes } from "./auditRoutes.ts";
 import { pruneAudit } from "./audit.ts";
 import { backupRoutes } from "./routes/backups.ts";
+import { contractRoutes } from "./routes/contracts.ts";
 import { AutoBackup } from "./backups.ts";
 
 // auth: the login (on unless a test turns it off).
@@ -63,6 +64,7 @@ export function buildApp(db: DB = openDb(), opts: { logger?: boolean; auth?: boo
   insightsRoutes(app, db);
   notificationRoutes(app, db);
   scheduleRoutes(app, db);
+  contractRoutes(app, db);
 
   // The web app (web/dist, built with `npm run build` in web/), served from the same address.
   // Any non-API path gets index.html, so links into the app work on reload.

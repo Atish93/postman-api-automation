@@ -36,13 +36,24 @@ A QA team of agents built with the Claude Agent SDK.
 | Debugger | Diagnoses each failure as test defect, flaky, or API bug, by probing the API directly; or triages a widespread outage. Changes nothing | `search_knowledge`, `get_request`, `get_run_details`, `send_request`, `rerun_collection`, `record_diagnosis` |
 | Self-healer | Fixes diagnosed test defects with the smallest change | `search_knowledge`, `get_request`, `get_run_details`, `patch_request`, `rerun_collection` |
 | Orchestrator | Runs the process and decides what gets published | `Agent` (starts the others), `run_status`, `mark_known_bugs`, approval and Postman tools |
+| Contract Analyst | Contract runs only: reads an API contract (OpenAPI/Swagger, or a PDF/Word/Markdown document) and writes test cases tied to it, plus the gaps where the contract is silent | `contract_overview`, `contract_endpoint`, `contract_response_schema`, `contract_search`, `contract_read` |
 
-Agents are defined in `agents.ts`, tools and every safety rule in `tools.ts`, settings in `qa.config.json`.
+Agents are defined in `agents.ts`, tools and every safety rule in `tools.ts` (contract tools in `contract.ts`), settings in `qa.config.json`.
+
+**Contract runs** (started from the dashboard's Contracts page) test any API against its contract:
+1. The Contract Analyst reads the contract and writes test cases.
+2. You review them: keep, edit, remove or add cases, or send them back with feedback. The edited cases are what gets built.
+3. The builder turns them into a collection. It must have exactly one request per approved case: the program refuses anything else. Response schemas from the contract are asserted in full with `pm.response.to.have.jsonSchema`.
+4. The debugger and self-healer work as usual, with the contract as their documentation. A response that contradicts the contract is an API bug (a "contract violation") and is marked `KNOWN BUG`. The knowledge base isn't used, since it's about another API.
+5. Nothing is published by the agents: the dashboard asks which workspace, and a new collection or a folder in an existing one, and publishes only after you confirm.
+
+The contract is treated as data, never as instructions, so text inside a document can't direct the agents.
 
 ### Running it
 
     npm run build-tests -- [--env test|stg|prod] "what to test" [workspace id]     # build a new collection
     npm run regression -- [--env test|stg|prod] [collection uid ...]               # re-check published collections
+    npx tsx orchestrator.ts [--env ...] --contract <contract.json>                # contract run (the dashboard writes the file)
 
 With no uids, regression re-checks every "(agent-built)" collection in the workspace.
 
@@ -53,7 +64,7 @@ Exit codes, for CI: `0` finished, `2` server issues, `3` circuit breaker tripped
 - `serverErrors`: when the run is treated as an outage instead of failures to debug (see below). `recheckAfterSeconds` is the wait before the confirming re-run.
 - `circuitBreaker`: the run stops repairing when this many requests need diagnosis at once: `minFailingRequests` or `failingRequestPercent`% of the collection, whichever is larger, and never more than half the collection. With the defaults: 11 requests trips at 6, 50 at 10, 200 at 30.
 - `limits`: per run, at most `healsPerRun` changed requests, `attemptsPerRequest` changes to one request, and `newKnownBugsPerRun` new known bugs without a person's approval.
-- `models`: `default`, plus optional `planner`, `builder`, `debugger`, `healer`, `orchestrator` to give one agent a different model. Run the model exam before changing one.
+- `models`: `default`, plus optional `planner`, `analyst`, `builder`, `debugger`, `healer`, `orchestrator` to give one agent a different model. Run the model exam before changing one.
 
 ### Rules enforced in code
 These live in `tools.ts`, so they hold whatever model an agent runs on:
@@ -78,6 +89,7 @@ This is how the dashboard (see `docs/ROADMAP.md`) drives the agents:
 
 ### Checking it
 - `npm run check`: checks every rule above directly, with no agents and no cost.
+- `npm run check:contract`: checks contract runs with no agents and no cost: reading specs and documents, response schemas that Newman really enforces (a conforming response passes, a violation fails), your case review (approve, edit, feedback), the one-request-per-case rule, and that nobody in a contract run can publish.
 - `npm run check:events`: checks the interface above (events, approvals from another program, result file), with no agents and no cost. Uses a fake server on your machine for the 5xx and circuit-breaker cases.
 - `npm run eval [-- --model <model id>]`: **the model exam.** Runs the debugger and healer on collections with known faults (`eval/fixtures/`) and scores them; earlier findings are hidden so the answers can't be looked up. Run it before switching an agent to a different model. Roughly $0.30–0.60 per run.
 - `npm run drill -- crash|500|404 <collection uid>`: drills with the real agents against a fake server. `crash` forwards to the real API but makes the checkin filter answer 500: it should be debugged as an API bug, not terminate. `500` (everything fails) should end with "Facing server issues". `404` should trip the circuit breaker. Drills are dry runs (`QA_DRY_RUN=1`): nothing is written to Postman or the knowledge base.
