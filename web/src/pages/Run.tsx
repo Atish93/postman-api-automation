@@ -305,7 +305,7 @@ export function RunPage() {
   const result = r.result;
   const executions = result && "executions" in result ? result.executions : null;
   const live = events.filter((e) => e.type === "request_done").map((e) => ({ ...e.data, request: e.data.request as string }));
-  const activity = events.filter((e) => EVENT_LOOK[e.type]);
+  const activity = events.filter((e) => EVENT_LOOK[e.type]).reverse(); // newest first
   const log = events.filter((e) => e.type === "log");
 
   return (
