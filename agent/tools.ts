@@ -26,16 +26,16 @@ const KNOWN_BUG_PREFIX = "KNOWN BUG - ";
 export const abortController = new AbortController();
 
 // ---- State shared by the tools ----
-type Failure = { request: string; assertion: string; error: string };
+export type Failure = { request: string; assertion: string; error: string };
 type Header = { key: string; value: string };
-type Detail = {
+export type Detail = {
   method: string; url: string; status?: number; response_time_ms?: number; error?: string; body: string; assertions: { name: string; error?: string }[];
   // Kept for the debug page (secrets hidden): what was sent and the response's headers.
   request_headers: Header[]; request_body: string; response_headers: Header[]; response_size?: number; at: string;
 };
 type Cause = { title: string; likelihood: "high" | "medium" | "low"; explanation: string; evidence_for?: string[]; evidence_against?: string[] };
 type Fix = { kind: "report_api_bug" | "change_test" | "fix_environment" | "clarify_contract"; title: string; detail: string; change?: string; recommended?: boolean };
-type Diagnosis = {
+export type Diagnosis = {
   request: string;
   assertion: string;
   category: "test_defect" | "api_bug" | "flaky";
@@ -73,6 +73,7 @@ const state = {
   probeBookings: [] as number[], // bookings the debugger created, deleted by cleanupProbes()
   probes: [] as Probe[], // every send_request, for the debug page
   focus: null as string | null, // the request the debugger last looked at (probes default to it)
+  followup: false, // follow-up work from the dashboard (agent/followup.ts)
   firstFailure: new Map<string, Detail>(), // each failing request's result the first time it failed (before any fix)
   outcome: {} as { published?: { uid: string; name: string }; updated?: string },
   finished: [] as any[], // summaries of collections already worked on in this run (regression)
@@ -130,6 +131,12 @@ async function askHuman(question: string, details: Record<string, unknown> = {})
     old.resolve(SUPERSEDED);
   }
   emit("approval_request", { id, question, ...details });
+  // Follow-up work the person already chose on the dashboard (e.g. "Apply and re-run" a fix) is pre-approved.
+  if (typeof details.kind === "string" && (process.env.QA_PREAPPROVE ?? "").split(",").includes(details.kind)) {
+    console.log(`${question}y (approved in advance on the dashboard)`);
+    emit("approval_answer", { id, answer: "y", preapproved: true });
+    return "y";
+  }
   if (process.env.QA_NO_PROMPTS === "1") {
     console.log(`${question}(no answer: prompts are off)`);
     return null;
@@ -155,21 +162,26 @@ export function closeHuman() {
 // Headers with credential-like names are hidden, and so is any value of an environment variable with such a name.
 const SECRET_NAME = /authorization|cookie|token|secret|password|passwd|api[-_]?key|session|credential/i;
 const HIDDEN = "••••••";
-function secretValues(): string[] {
+function secretVariables(): [string, string][] {
   return Object.entries((env() as any).variables ?? {})
-    .filter(([k, v]) => SECRET_NAME.test(k) && typeof v === "string" && v.length >= 4)
-    .map(([, v]) => v as string);
+    .filter(([k, v]) => SECRET_NAME.test(k) && typeof v === "string" && v.length >= 4) as [string, string][];
 }
+// A secret that came from an environment variable becomes {{name}}, so the dashboard can fill it in again
+// when it re-sends the request; any other secret-looking value is hidden for good.
 export function redact(s: string): string {
   let out = String(s ?? "");
-  for (const v of secretValues()) out = out.split(v).join(HIDDEN);
+  for (const [k, v] of secretVariables()) out = out.split(v).join(`{{${k}}}`);
   return out
     .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{6,}/g, `$1 ${HIDDEN}`)
     .replace(/([?&](?:api[_-]?key|access_token|token|password|secret)=)[^&#\s]+/gi, `$1${HIDDEN}`)
     .replace(/("(?:password|token|accessToken|access_token|secret|api_?key)"\s*:\s*")[^"]*"/gi, `$1${HIDDEN}"`);
 }
 function redactHeaders(list: { key: string; value: unknown }[] = []): Header[] {
-  return list.filter((h) => h?.key).map((h) => ({ key: h.key, value: SECRET_NAME.test(h.key) ? HIDDEN : redact(String(h.value ?? "")) }));
+  return list.filter((h) => h?.key).map((h) => {
+    const value = String(h.value ?? ""), safe = redact(value);
+    // A credential header keeps only what redact() could name ({{apiKey}}, "Bearer {{accessToken}}"); otherwise it's hidden.
+    return { key: h.key, value: SECRET_NAME.test(h.key) && (safe === value || !safe.includes("{{")) ? HIDDEN : safe };
+  });
 }
 
 function requestsOf(items: any[] = []): any[] {
@@ -259,13 +271,15 @@ function triage() {
     },
   };
 }
-const breakerTripped = () => triage().circuit_breaker.tripped;
+// Follow-up work a person chose (a fix from the debug page) isn't held by the breaker: it exists to stop the
+// agents healing on their own during an outage. The keep-or-undo rule and canShip() still apply.
+const breakerTripped = () => !state.followup && triage().circuit_breaker.tripped;
 let breakerAnnounced = false;
 // Whether the latest run tripped the breaker (for the program's exit code).
 export const breakerState = () => (state.lastRun ? breakerTripped() : false);
 const BREAKER_REFUSAL = "Refused: the circuit breaker has tripped (too many requests failing at once). Nothing may be changed, marked or saved in this run.";
 
-function canShip(): string | null {
+export function canShip(): string | null {
   if (!state.collection || !state.lastRun) return "no collection has been run yet";
   if (state.dirty) return "the collection changed since its last run; run it again first";
   if (breakerTripped()) return "the circuit breaker has tripped";
@@ -411,9 +425,30 @@ async function runWorkingCollection(confirming = false): Promise<any> {
 }
 
 // For the model exam (eval/): load a collection from a local file instead of Postman.
+// Follow-up work on a finished run (agent/followup.ts): the run's collection as it ended, its last results
+// and diagnoses, and (contract runs) its approved plan, so the debugger or healer can carry on from there.
+export function seedFollowup(job: {
+  collection: any; source_uid?: string | null; plan?: PlanT | null;
+  request: string; exchange?: Detail | null; failures: Failure[]; diagnoses?: Diagnosis[];
+  requests?: number; assertions?: number; passing?: string[];
+}) {
+  const failing = new Set(job.failures.map((f) => f.request));
+  const names = requestsOf(job.collection?.item).map((r) => r.name);
+  Object.assign(state, {
+    collection: structuredClone(job.collection), source: job.source_uid ? { uid: job.source_uid } : null,
+    loadedSnapshot: JSON.stringify(job.collection), dirty: false,
+    lastRun: { failures: job.failures, requests: job.requests ?? names.length, assertions: job.assertions ?? 0,
+      passing: new Set(job.passing ?? names.filter((n) => !failing.has(n))) },
+    details: new Map(job.exchange ? [[job.request, job.exchange]] : []),
+    diagnoses: [...(job.diagnoses ?? [])], heals: [], pending: [], changedRequests: new Set(), attempts: new Map(),
+    probes: [], firstFailure: new Map(job.exchange ? [[job.request, job.exchange]] : []), focus: job.request,
+    contractPlan: job.plan ?? null, approved: true, followup: true,
+  });
+}
+
 export function loadCollectionFile(path: string) {
   const c = JSON.parse(readFileSync(path, "utf8"));
-  Object.assign(state, { collection: c.collection ?? c, source: null, lastRun: null, dirty: false, diagnoses: [], heals: [], pending: [], changedRequests: new Set(), attempts: new Map(), probes: [], firstFailure: new Map(), focus: null });
+  Object.assign(state, { collection: c.collection ?? c, source: null, lastRun: null, dirty: false, diagnoses: [], heals: [], pending: [], changedRequests: new Set(), attempts: new Map(), probes: [], firstFailure: new Map(), focus: null, followup: false });
 }
 export const snapshot = () => ({ collection: state.collection, diagnoses: state.diagnoses, heals: state.heals, lastRun: state.lastRun });
 
@@ -942,6 +977,7 @@ function collectionSummary() {
     changes: state.heals,
     executions: executionsSummary(),
     issues: debugIssues(),
+    collection: state.collection, // the working collection as it ended, for follow-up work from the dashboard
     published: state.outcome.published ?? null,
     updated: state.outcome.updated ?? null,
   };

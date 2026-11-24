@@ -11,7 +11,7 @@ const SECRET = "sekret-token-123456";
 const server = createServer((req, res) => {
   if (req.url === "/ping") return res.writeHead(200).end("ok");
   if (req.url === "/item") return res.writeHead(200, { "Content-Type": "application/json" }).end('{"id":1}');
-  res.writeHead(500, { "Content-Type": "application/json", "Set-Cookie": `session=${SECRET}` })
+  res.writeHead(500, { "Content-Type": "application/json", "Set-Cookie": "session=a-server-session-value" })
     .end(JSON.stringify({ error: "NullPointerException", auth: req.headers.authorization ?? null }));
 });
 await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -78,8 +78,30 @@ check("the diagnosis keeps its causes and fixes", issue?.diagnoses[0]?.causes?.l
 check("executions list every request with its result", c.executions.length === 2 && c.executions.some((e: any) => e.case_id === "TC01" && e.failed === 0 && e.passed === 1), JSON.stringify(c.executions));
 
 console.log("-- Secrets --");
-check("the Authorization header is hidden", issue?.exchange.request_headers.find((h: any) => h.key === "Authorization")?.value === "••••••", JSON.stringify(issue?.exchange.request_headers));
+check("the Authorization header keeps only the variable's name, so it can be re-sent", issue?.exchange.request_headers.find((h: any) => h.key === "Authorization")?.value === "Bearer {{accessToken}}", JSON.stringify(issue?.exchange.request_headers));
+check("a cookie that isn't an environment variable is hidden for good", issue?.exchange.response_headers.find((h: any) => h.key.toLowerCase() === "set-cookie")?.value === "••••••", JSON.stringify(issue?.exchange.response_headers));
+check("the final collection is kept with the run, for follow-up work", c.collection?.item?.length === 2);
 check("the secret appears nowhere in the result (headers, bodies, probes)", !all.includes(SECRET), all.slice(all.indexOf(SECRET) - 80, all.indexOf(SECRET) + 40));
+
+console.log("-- Follow-up from the dashboard: apply a chosen fix, then re-run --");
+// Seeded from the finished run's result, as agent/followup.ts does. The chosen fix points the request at the
+// right URL and expects its status: both need approval, given in advance because the person chose the fix.
+// (A fix that accepted the 500 would never be kept: a server error always counts as a failure.)
+process.env.QA_PREAPPROVE = "url change,method change,assertion change";
+t.seedFollowup({
+  collection: c.collection, request: "TC02 Upload empty", exchange: issue.exchange,
+  failures: c.failures, passing: ["TC01 Get item"], requests: 2, assertions: 2,
+});
+await call(t.recordDiagnosis, { request: "TC02 Upload empty", assertion: "Status is 400", category: "test_defect", confidence: "high", evidence: "chosen on the dashboard" });
+const url = await call(t.patchRequest, { request_name: "TC02 Upload empty", part: "url", reason: "chosen fix", new_value: "{{baseUrl}}/item" });
+const script = await call(t.patchRequest, { request_name: "TC02 Upload empty", part: "test_script", reason: "chosen fix",
+  new_value: 'pm.test("Status is 200", () => pm.response.to.have.status(200));' });
+check("URL and assertion changes are applied without waiting for a person", !url.error && !script.error, url.text + " | " + script.text);
+await call(t.rerunCollection);
+const after = t.runResults().collections[0];
+check("after the re-run the changes are kept and nothing fails", after.failed_assertions === 0 && after.changes.length >= 1 && !after.changes.some((ch: string) => ch.includes("reverted")), JSON.stringify(after.changes));
+check("the follow-up's bundle shows the request now passes", after.issues.find((i: any) => i.request === "TC02 Upload empty")?.state === "passing_now");
+check("…and it could be saved back (nothing unexplained left)", t.canShip() === null, String(t.canShip()));
 
 server.close();
 console.log(failed ? `\n${failed} check(s) failed` : "\nAll checks passed");
