@@ -11,7 +11,8 @@
     "drill": "tsx tests/outage-drill.ts",
     "typecheck": "tsc",
     "check:events": "tsx tests/check-events.ts",
-    "check:contract": "tsx tests/check-contract.ts"
+    "check:contract": "tsx tests/check-contract.ts",
+    "check:debug": "tsx tests/check-debug.ts"
   },
   "keywords": [],
   "author": "",

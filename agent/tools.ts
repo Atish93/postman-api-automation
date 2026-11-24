@@ -27,7 +27,14 @@ export const abortController = new AbortController();
 
 // ---- State shared by the tools ----
 type Failure = { request: string; assertion: string; error: string };
-type Detail = { method: string; url: string; status?: number; response_time_ms?: number; error?: string; body: string; assertions: { name: string; error?: string }[] };
+type Header = { key: string; value: string };
+type Detail = {
+  method: string; url: string; status?: number; response_time_ms?: number; error?: string; body: string; assertions: { name: string; error?: string }[];
+  // Kept for the debug page (secrets hidden): what was sent and the response's headers.
+  request_headers: Header[]; request_body: string; response_headers: Header[]; response_size?: number; at: string;
+};
+type Cause = { title: string; likelihood: "high" | "medium" | "low"; explanation: string; evidence_for?: string[]; evidence_against?: string[] };
+type Fix = { kind: "report_api_bug" | "change_test" | "fix_environment" | "clarify_contract"; title: string; detail: string; change?: string; recommended?: boolean };
 type Diagnosis = {
   request: string;
   assertion: string;
@@ -35,6 +42,14 @@ type Diagnosis = {
   confidence: "high" | "medium" | "low";
   evidence: string;
   fix_hint?: string;
+  causes?: Cause[];
+  fixes?: Fix[];
+};
+// A request the debugger sent with send_request, kept for the debug page of the failure it was investigating.
+type Probe = {
+  for_request: string | null; purpose: string | null; at: string;
+  method: string; url: string; request_headers: Header[]; request_body: string;
+  status?: number; response_time_ms?: number; error?: string; response_body: string;
 };
 type PendingChange = { item: any; before: any; record: string };
 
@@ -56,6 +71,9 @@ const state = {
   attempts: new Map<string, number>(), // patch attempts per request
   serverIssue: null as string | null,
   probeBookings: [] as number[], // bookings the debugger created, deleted by cleanupProbes()
+  probes: [] as Probe[], // every send_request, for the debug page
+  focus: null as string | null, // the request the debugger last looked at (probes default to it)
+  firstFailure: new Map<string, Detail>(), // each failing request's result the first time it failed (before any fix)
   outcome: {} as { published?: { uid: string; name: string }; updated?: string },
   finished: [] as any[], // summaries of collections already worked on in this run (regression)
 };
@@ -131,6 +149,27 @@ export function closeHuman() {
   const r = stdinReader;
   stdinReader = null;
   r?.close();
+}
+
+// ---- Hiding secrets in what is kept for the debug page ----
+// Headers with credential-like names are hidden, and so is any value of an environment variable with such a name.
+const SECRET_NAME = /authorization|cookie|token|secret|password|passwd|api[-_]?key|session|credential/i;
+const HIDDEN = "••••••";
+function secretValues(): string[] {
+  return Object.entries((env() as any).variables ?? {})
+    .filter(([k, v]) => SECRET_NAME.test(k) && typeof v === "string" && v.length >= 4)
+    .map(([, v]) => v as string);
+}
+export function redact(s: string): string {
+  let out = String(s ?? "");
+  for (const v of secretValues()) out = out.split(v).join(HIDDEN);
+  return out
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{6,}/g, `$1 ${HIDDEN}`)
+    .replace(/([?&](?:api[_-]?key|access_token|token|password|secret)=)[^&#\s]+/gi, `$1${HIDDEN}`)
+    .replace(/("(?:password|token|accessToken|access_token|secret|api_?key)"\s*:\s*")[^"]*"/gi, `$1${HIDDEN}"`);
+}
+function redactHeaders(list: { key: string; value: unknown }[] = []): Header[] {
+  return list.filter((h) => h?.key).map((h) => ({ key: h.key, value: SECRET_NAME.test(h.key) ? HIDDEN : redact(String(h.value ?? "")) }));
 }
 
 function requestsOf(items: any[] = []): any[] {
@@ -264,7 +303,9 @@ async function runWorkingCollection(confirming = false): Promise<any> {
   writeFileSync("runs/last-collection.json", JSON.stringify(state.collection, null, 2));
 
   state.details = new Map();
+  const at = new Date().toISOString();
   for (const x of summary.run.executions) {
+    const all = (list: any) => (typeof list?.all === "function" ? list.all() : []) as { key: string; value: unknown }[];
     state.details.set(x.item.name, {
       method: x.request?.method,
       url: x.request?.url?.toString(),
@@ -273,6 +314,11 @@ async function runWorkingCollection(confirming = false): Promise<any> {
       error: x.requestError?.message,
       body: x.response?.stream?.toString().slice(0, 2000) ?? "",
       assertions: (x.assertions ?? []).map((a: any) => ({ name: a.assertion, error: a.error?.message })),
+      request_headers: redactHeaders(all(x.request?.headers)),
+      request_body: redact(x.request?.body?.toString?.() ?? "").slice(0, 4000),
+      response_headers: redactHeaders(all(x.response?.headers)),
+      response_size: x.response?.responseSize,
+      at,
     });
   }
 
@@ -308,6 +354,8 @@ async function runWorkingCollection(confirming = false): Promise<any> {
     return failed;
   });
   const failing = new Set(failures.map((f) => f.request));
+  // The first failing result of each request is what the debug page shows as "as sent in the run".
+  for (const name of failing) if (!state.firstFailure.has(name)) state.firstFailure.set(name, state.details.get(name)!);
   state.lastRun = {
     failures,
     requests: summary.run.stats.requests.total,
@@ -365,7 +413,7 @@ async function runWorkingCollection(confirming = false): Promise<any> {
 // For the model exam (eval/): load a collection from a local file instead of Postman.
 export function loadCollectionFile(path: string) {
   const c = JSON.parse(readFileSync(path, "utf8"));
-  Object.assign(state, { collection: c.collection ?? c, source: null, lastRun: null, dirty: false, diagnoses: [], heals: [], pending: [], changedRequests: new Set(), attempts: new Map() });
+  Object.assign(state, { collection: c.collection ?? c, source: null, lastRun: null, dirty: false, diagnoses: [], heals: [], pending: [], changedRequests: new Set(), attempts: new Map(), probes: [], firstFailure: new Map(), focus: null });
 }
 export const snapshot = () => ({ collection: state.collection, diagnoses: state.diagnoses, heals: state.heals, lastRun: state.lastRun });
 
@@ -427,6 +475,7 @@ export const getRunDetails = tool(
   { request_name: z.string() },
   async ({ request_name }) => {
     const d = state.details.get(request_name);
+    if (d) state.focus = request_name;
     return d ? text(JSON.stringify({ request: request_name, ...d }, null, 2)) : text(`No result for "${request_name}" in the last run.`, true);
   },
 );
@@ -438,6 +487,7 @@ export const getRequest = tool(
   async ({ request_name }) => {
     const r = findRequest(request_name);
     if (!r) return text(`No request named "${request_name}". Names: ${requestsOf(state.collection?.item).map((x) => x.name).join(" | ")}`, true);
+    state.focus = r.name;
     const { method, url, header, body } = r.request;
     return text(JSON.stringify({ name: r.name, method, url, header, body, prerequest_script: scriptOf(r, "prerequest"), test_script: scriptOf(r, "test"), collection_variables: state.collection.variable, base_url_in_use: env().baseUrl }, null, 2));
   },
@@ -452,21 +502,33 @@ export const sendRequest = tool(
     url: z.string().describe("Full URL on the environment under test, e.g. <base URL>/booking?checkin=2027-06-10"),
     headers: z.record(z.string(), z.string()).optional(),
     body: z.string().optional().describe("Raw request body, usually JSON"),
+    for_request: z.string().optional().describe("Exact name of the failed request this probe investigates (shown on its debug page). Defaults to the request you last read."),
+    purpose: z.string().optional().describe("What this variation tests, in a few words, e.g. 'same request again' or 'with Content-Type added'"),
   },
-  async ({ method, url, headers, body }) => {
+  async ({ method, url, headers, body, for_request, purpose }) => {
     if (state.serverIssue) return text(stopForServerIssue(""), true);
     const host = new URL(url).host;
     if (host !== env().host) return text(`Refused: only ${env().host} (the ${env().label} environment) may be probed.`, true);
+    const probe: Probe = {
+      for_request: for_request && findRequest(for_request) ? for_request : state.focus, purpose: purpose ?? null, at: new Date().toISOString(),
+      method, url: redact(url), request_headers: redactHeaders(Object.entries(headers ?? {}).map(([key, value]) => ({ key, value }))),
+      request_body: redact(body ?? "").slice(0, 4000), response_body: "",
+    };
+    state.probes.push(probe);
     let res: Response;
+    const started = Date.now();
     try {
       res = await fetch(url, { method, headers, body, signal: AbortSignal.timeout(30_000) });
     } catch (e: any) {
+      probe.error = String(e.cause?.code ?? e.message);
+      probe.response_time_ms = Date.now() - started;
       const health = await checkServerHealth();
       if (health) return text(stopForServerIssue(`${health.split("\n").slice(1).join(" ")} Probe ${method} ${url} also failed: ${e.cause?.code ?? e.message}`), true);
       return text(`No response: ${e.cause?.code ?? e.message}. The health check still passes, so the server is up; this endpoint did not answer.`, true);
     }
     const resBody = await res.text();
-    console.log(`[probe] ${method} ${url} -> ${res.status}`);
+    Object.assign(probe, { status: res.status, response_time_ms: Date.now() - started, response_body: redact(resBody).slice(0, 4000) });
+    console.log(`[probe] ${method} ${redact(url)} -> ${res.status}${probe.for_request ? ` (for "${probe.for_request}")` : ""}`);
     if (res.status >= 500) {
       const health = await checkServerHealth();
       if (health) return text(stopForServerIssue(`${health.split("\n").slice(1).join(" ")} Probe ${method} ${url} answered ${res.status}.`), true);
@@ -496,9 +558,24 @@ export const recordDiagnosis = tool(
     evidence: z.string().describe("What you observed that proves it, e.g. probe requests and their responses"),
     fix_hint: z.string().optional().describe("For test_defect: what should change in the test"),
     lesson: z.string().optional().describe("One general sentence for future runs, naming the endpoint, e.g. 'GET /booking?checkin= excludes bookings on the given date (docs say on or after)'. Omit if the knowledge base already has it."),
+    causes: z.array(z.object({
+      title: z.string().describe("The possible cause in one short sentence"),
+      likelihood: z.enum(["high", "medium", "low"]),
+      explanation: z.string().describe("Why this could cause the failure, in one or two sentences"),
+      evidence_for: z.array(z.string()).max(4).optional().describe("Observations that support it, e.g. a probe and its result"),
+      evidence_against: z.array(z.string()).max(4).optional().describe("Observations that argue against it"),
+    })).max(3).optional().describe("Up to 3 possible causes, most likely first, for the person debugging it"),
+    fixes: z.array(z.object({
+      kind: z.enum(["report_api_bug", "change_test", "fix_environment", "clarify_contract"]),
+      title: z.string().describe("The fix in a few words"),
+      detail: z.string().describe("What to do and why it fixes the failure; for report_api_bug, a ready-to-send bug report with the reproduction"),
+      change: z.string().optional().describe("For change_test: the exact change, as lines starting with - (removed) and + (added)"),
+      recommended: z.boolean().optional(),
+    })).max(3).optional().describe("Up to 3 probable fixes; mark the one you recommend"),
   },
   async ({ lesson, ...d }) => {
     if (!findRequest(d.request)) return text(`No request named "${d.request}".`, true);
+    state.focus = d.request;
     state.diagnoses = state.diagnoses.filter((x) => !(x.request === d.request && x.assertion === d.assertion));
     state.diagnoses.push(d);
     console.log(`[diagnosis] ${d.category} (${d.confidence}): ${d.request} / ${d.assertion}`);
@@ -714,6 +791,9 @@ export const markKnownBugs = tool(
       r.name = KNOWN_BUG_PREFIX + name;
       r.request.description = `${r.request.description ?? ""}\n\nThis request currently fails because of an API bug:\n${evidence}`.trim();
       for (const d of state.diagnoses) if (d.request === name) d.request = r.name;
+      for (const p of state.probes) if (p.for_request === name) p.for_request = r.name;
+      const first = state.firstFailure.get(name);
+      if (first) { state.firstFailure.delete(name); state.firstFailure.set(r.name, first); }
       marked.push(r.name);
     }
     state.dirty = true;
@@ -733,7 +813,7 @@ export const loadPublishedCollection = tool(
     Object.assign(state, {
       outcome: {},
       collection: data.collection, source: { uid: collection_uid }, loadedSnapshot: JSON.stringify(data.collection),
-      lastRun: null, dirty: false, diagnoses: [], heals: [], pending: [], changedRequests: new Set(), attempts: new Map(),
+      lastRun: null, dirty: false, diagnoses: [], heals: [], pending: [], changedRequests: new Set(), attempts: new Map(), probes: [], firstFailure: new Map(), focus: null,
     });
     return text(`Loaded "${data.collection.info.name}" with ${requestsOf(data.collection.item).length} requests.`);
   },
@@ -812,6 +892,39 @@ let totalCost = 0;
 let lastReport = "";
 export const costSoFar = () => totalCost;
 
+// "TC24 Upload image" or "KNOWN BUG - TC24 Upload image" -> "TC24"
+const caseIdOf = (name: string) => name.replace(KNOWN_BUG_PREFIX, "").match(/^(TC\d{2,3})\b/)?.[1] ?? null;
+
+// Every request of the last run, passed or failed: the run page's test case results.
+function executionsSummary() {
+  return [...state.details].map(([request, d]) => ({
+    request, case_id: caseIdOf(request), method: d.method, status: d.status ?? null, error: d.error ?? null,
+    passed: d.assertions.filter((a) => !a.error).length, failed: d.assertions.filter((a) => a.error).length,
+  }));
+}
+
+// One debug bundle per request that failed at any point in this run: what was sent and received,
+// its scripts, the debugger's probes, its diagnoses (with likely causes and fixes) and the healer's changes.
+function debugIssues() {
+  const failingNow = new Set((state.lastRun?.failures ?? []).map((f) => f.request));
+  return [...state.firstFailure].map(([request, first]) => {
+    const still = failingNow.has(request);
+    const exchange = still ? state.details.get(request) ?? first : first;
+    const item = findRequest(request);
+    const base = request.replace(KNOWN_BUG_PREFIX, "");
+    return {
+      request, case_id: caseIdOf(request), state: still ? "failing" : "passing_now",
+      exchange: { ...exchange, body: redact(exchange.body) },
+      failed_assertions: exchange.assertions.filter((a) => a.error).map((a) => ({ assertion: a.name, error: a.error })),
+      test_script: item ? scriptOf(item, "test") : "",
+      prerequest_script: item ? scriptOf(item, "prerequest") : "",
+      probes: state.probes.filter((p) => p.for_request === request),
+      diagnoses: state.diagnoses.filter((d) => d.request === request),
+      changes: state.heals.filter((h) => h.includes(base)),
+    };
+  });
+}
+
 // What one collection ended up as: for the result file and the dashboard.
 function collectionSummary() {
   const t = triage();
@@ -827,6 +940,8 @@ function collectionSummary() {
     circuit_breaker_tripped: state.lastRun ? t.circuit_breaker.tripped : false,
     diagnoses: state.diagnoses,
     changes: state.heals,
+    executions: executionsSummary(),
+    issues: debugIssues(),
     published: state.outcome.published ?? null,
     updated: state.outcome.updated ?? null,
   };

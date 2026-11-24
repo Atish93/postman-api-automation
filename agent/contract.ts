@@ -200,7 +200,11 @@ export const Plan = z.object({
   auth: z.string().optional(),
   endpoints: z.array(z.string()).optional(),
   endpoints_found: z.array(z.any()).optional(),
-  gaps: z.array(z.string()).optional(),
+  // A gap is a sentence (older plans) or an object naming the endpoints it affects and a suggested fix to the contract.
+  gaps: z.array(z.union([z.string(), z.object({
+    text: z.string().min(1), endpoints: z.array(z.string()).optional(), not_tested: z.string().optional(),
+    contract_now: z.string().optional(), suggestion: z.string().optional(),
+  }).passthrough()])).optional(),
   cases: z.array(Case).min(1),
 }).passthrough();
 export type PlanT = z.infer<typeof Plan>;
