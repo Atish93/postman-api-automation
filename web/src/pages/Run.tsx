@@ -1,9 +1,9 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router";
-import { api, type AiCollectionResult, type Execution, type Run, type RunEvent } from "../api.ts";
-import { Markdown } from "../markdown.tsx";
-import { CaseReview, ContractOutcome } from "../ContractRun.tsx";
+import { api, type Execution, type Run, type RunEvent } from "../api.ts";
+import { CaseReview, PublishStatus } from "../ContractRun.tsx";
+import { AgentReportCard, ExecutionLogs, FullReportPanel, GapsCard, OutcomeBar, StatTiles, TestCasesCard, aiResultOf } from "../RunParts.tsx";
 import { dateTime, duration, money } from "../format.ts";
 import { Button, Card, ErrorNote, Icon, KindBadge, Modal, Spinner, StatusBadge, inputClass, useToast } from "../ui.tsx";
 import { relativeTime } from "../format.ts";
@@ -190,100 +190,13 @@ function RequestRow({ e }: { e: Execution | (RunEvent["data"] & { request: strin
   );
 }
 
-// ---------- AI runs: what the agents did ----------
-const EVENT_LOOK: Record<string, { icon: string; color?: string }> = {
-  agent_message: { icon: "sparkle", color: "var(--accent)" },
-  agent_started: { icon: "play" },
-  tool_call: { icon: "chevron" },
-  collection_loaded: { icon: "folder" },
-  collection_run: { icon: "list" },
-  diagnosis: { icon: "bug", color: "var(--status-warning)" },
-  change_pending: { icon: "refresh" },
-  change_kept: { icon: "check", color: "var(--status-good)" },
-  change_reverted: { icon: "x", color: "var(--status-critical)" },
-  known_bugs_marked: { icon: "bug", color: "var(--status-warning)" },
-  learned: { icon: "sparkle" },
-  approval_request: { icon: "alert", color: "var(--status-warning)" },
-  approval_answer: { icon: "check" },
-  server_errors: { icon: "plug", color: "var(--status-serious)" },
-  server_issue: { icon: "plug", color: "var(--status-serious)" },
-  circuit_breaker: { icon: "pause", color: "var(--status-serious)" },
-  published: { icon: "upload", color: "var(--status-good)" },
-  collection_imported: { icon: "folder", color: "var(--status-good)" },
-  email_sent: { icon: "upload", color: "var(--status-good)" },
-  email_failed: { icon: "alert", color: "var(--status-critical)" },
-  updated: { icon: "upload", color: "var(--status-good)" },
-  cases_approved: { icon: "check", color: "var(--status-good)" },
-};
-
-// One line of an agent message, without Markdown markers.
-const plain = (t: string) => t.replace(/\*\*|`|^#+\s*/g, "");
-
-function describe(e: RunEvent): React.ReactNode {
-  const d = e.data;
-  switch (e.type) {
-    case "agent_message": return <><span className="font-medium capitalize">{d.agent}</span>: <span className="text-ink-2">{plain(String(d.text).split("\n")[0]).slice(0, 220)}</span></>;
-    case "agent_started": return <><span className="font-medium capitalize">{d.agent}</span> started the <span className="font-medium">{d.target}</span></>;
-    case "tool_call": return <><span className="capitalize">{d.agent}</span> <span className="text-ink-2">used</span> <span className="font-mono text-xs">{d.target}</span></>;
-    case "collection_loaded": return <>Loaded <span className="font-medium">{d.name}</span></>;
-    case "collection_run": return <>Ran the collection: {d.requests} requests, <span className="font-medium">{d.failed_assertions} failed check{d.failed_assertions === 1 ? "" : "s"}</span></>;
-    case "diagnosis": return <>Diagnosed <span className="font-medium">{d.request}</span> as <span className="font-medium">{String(d.category).replace("_", " ")}</span> ({d.confidence} confidence)</>;
-    case "change_pending": return <>Changed {d.part} of <span className="font-medium">{d.request}</span>{d.approved_by_human ? " (approved by you)" : ""}</>;
-    case "change_kept": return <>Kept the change to <span className="font-medium">{d.request}</span>: it now passes</>;
-    case "change_reverted": return <>Undid the change to <span className="font-medium">{d.request}</span>: it didn't fix the test</>;
-    case "known_bugs_marked": return <>Marked as known bugs: {(d.requests ?? []).join(", ")}</>;
-    case "learned": return <>Saved to the knowledge base: <span className="text-ink-2">{d.title}</span></>;
-    case "cases_approved": return <>You approved {d.cases} test case{d.cases === 1 ? "" : "s"}{d.edited ? ", with your changes" : ""}</>;
-    case "approval_request": return d.kind === "test_cases" ? <>Asked you to review {d.plan?.cases?.length ?? ""} test cases</> : <>Asked for approval{d.request ? ` (${d.request})` : ""}</>;
-    case "approval_answer": return <>Your answer: <span className="font-medium">{d.answer === "y" ? "approved" : String(d.answer ?? "").startsWith("{") ? "approved with your changes" : d.answer ?? "no answer"}</span></>;
-    case "server_errors": return <>{d.summary}</>;
-    case "server_issue": return <span className="font-medium">{d.message}</span>;
-    case "circuit_breaker": return <>Circuit breaker tripped: {d.requests_needing_diagnosis} requests failing (trips at {d.trips_at})</>;
-    case "published": return <>Published <span className="font-medium">{d.name}</span> to Postman</>;
-    case "updated": return <>Saved the collection back to Postman</>;
-    case "email_sent": return <>Emailed the report to {(d.recipients ?? []).join(", ")} <span className="text-ink-2">({d.reason})</span></>;
-    case "email_failed": return <>Couldn't email the report: <span className="text-ink-2">{d.error}</span></>;
-    case "collection_imported": return <>Added <Link to={`/collections/${d.collection_id}`} className="font-medium text-accent hover:underline">{d.name}</Link> to your collections</>;
-    default: return null;
-  }
-}
-
-function AiResult({ c }: { c: AiCollectionResult }) {
-  return (
-    <Card title={c.name}>
-      <div className="grid gap-4 p-4 text-sm md:grid-cols-2">
-        <div>
-          <div className="text-xs font-medium text-muted">Result</div>
-          <div className="mt-1">{c.requests} requests, {c.failed_assertions} of {c.assertions} checks failed{c.updated ? " · saved to Postman" : c.published ? " · published to Postman" : ""}</div>
-          {c.known_bugs.length > 0 && (<>
-            <div className="mt-3 text-xs font-medium text-muted">Known bugs</div>
-            <ul className="mt-1 space-y-1">{c.known_bugs.map((b) => <li key={b} className="flex gap-2"><Icon name="bug" className="mt-0.5 shrink-0 text-warning" />{b.replace("KNOWN BUG - ", "")}</li>)}</ul>
-          </>)}
-          {c.known_bugs_now_passing.length > 0 && <p className="mt-2 text-xs text-ink-2">Now passing, may be fixed: {c.known_bugs_now_passing.join(", ")}</p>}
-        </div>
-        <div>
-          <div className="text-xs font-medium text-muted">Diagnoses</div>
-          {c.diagnoses.length === 0 ? <p className="mt-1 text-ink-2">None needed.</p> : (
-            <ul className="mt-1 space-y-2">{c.diagnoses.map((d, i) => <li key={i}><span className="font-medium">{d.request}</span> <span className="text-ink-2">· {d.category.replace("_", " ")} ({d.confidence})</span><div className="text-xs text-ink-2">{d.evidence}</div></li>)}</ul>
-          )}
-          {c.changes.length > 0 && (<>
-            <div className="mt-3 text-xs font-medium text-muted">Changes by the self-healer</div>
-            <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded bg-raised p-2 font-mono text-xs ring-1 ring-line">{c.changes.join("\n\n")}</pre>
-          </>)}
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-// ---------- The page ----------
 export function RunPage() {
   const id = Number(useParams().id);
   const qc = useQueryClient();
   const toast = useToast();
   const run = useQuery({ queryKey: ["runs", id], queryFn: () => api.run(id) });
   const events = useRunEvents(id, () => { qc.invalidateQueries({ queryKey: ["runs"] }); qc.invalidateQueries({ queryKey: ["dashboard"] }); });
-  const [showLog, setShowLog] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const [emailing, setEmailing] = useState(false);
   const cancel = useMutation({ mutationFn: () => api.cancelRun(id), onError: (e) => toast("error", e.message) });
 
@@ -305,8 +218,8 @@ export function RunPage() {
   const result = r.result;
   const executions = result && "executions" in result ? result.executions : null;
   const live = events.filter((e) => e.type === "request_done").map((e) => ({ ...e.data, request: e.data.request as string }));
-  const activity = events.filter((e) => EVENT_LOOK[e.type]).reverse(); // newest first
-  const log = events.filter((e) => e.type === "log");
+  const ai = aiResultOf(r);
+  const issues = ai?.issues ?? [];
 
   return (
     <>
@@ -341,22 +254,16 @@ export function RunPage() {
             {!going && !r.collection.id && r.status !== "cancelled" && <p className="mt-2 text-xs text-ink-2">No collection was published from this run.</p>}
           </div>
         )}
-        {r.message && (
+        {going && r.message && (
           <div className="flex items-start gap-2 rounded-xl border px-4 py-3 text-sm" style={{ borderColor: "color-mix(in srgb, var(--status-serious) 50%, transparent)", background: "color-mix(in srgb, var(--status-serious) 9%, var(--card))" }}>
-            <Icon name={r.status === "circuit_breaker" ? "pause" : "plug"} className="mt-0.5 shrink-0 text-serious" /><span className="font-medium">{r.message}</span>
+            <Icon name="plug" className="mt-0.5 shrink-0 text-serious" /><span className="font-medium">{r.message}</span>
           </div>
         )}
         {pendingApproval && <ApprovalCard run={r} request={pendingApproval.req} answered={pendingApproval.answered} />}
-
-        {r.assertions != null && (
-          <div className="grid grid-cols-3 gap-3">
-            {[["Requests", r.requests], ["Checks", r.assertions], ["Failed checks", r.failed_assertions]].map(([label, value]) => (
-              <div key={label as string} className="rounded-xl border border-line bg-card px-4 py-3"><div className="text-sm text-ink-2">{label}</div><div className="mt-1 text-2xl font-semibold">{value}</div></div>
-            ))}
-          </div>
-        )}
-
+        {!going && <OutcomeBar run={r} publish={r.ai_mode === "contract" ? <PublishStatus run={r} /> : undefined} />}
+        <StatTiles run={r} issues={issues} />
         <EmailsSent runId={r.id} going={going} />
+
         {r.kind === "plain" ? (
           <Card title={going ? <span className="flex items-center gap-2">Requests <Spinner size={12} /></span> : "Requests"}>
             {(executions ?? live).length === 0 ? <p className="px-4 py-6 text-sm text-ink-2">{going ? "Waiting for the first request…" : "No requests ran."}</p> : (
@@ -371,24 +278,15 @@ export function RunPage() {
           </Card>
         ) : (
           <>
-            {r.ai_mode === "contract" && !going && <ContractOutcome run={r} />}
-            {result && "collections" in result && result.report && <Card title="Report from the agents"><div className="px-4 py-3"><Markdown text={result.report} /></div></Card>}
-            {result && "collections" in result && result.collections.map((c, i) => <AiResult key={i} c={c} />)}
-            <Card title={going ? <span className="flex items-center gap-2">What the agents are doing <Spinner size={12} /></span> : "What the agents did"}
-              actions={log.length > 0 && <button className="text-xs text-accent hover:underline" onClick={() => setShowLog((v) => !v)}>{showLog ? "Hide full log" : `Full log (${log.length} lines)`}</button>}>
-              {activity.length === 0 ? <p className="px-4 py-6 text-sm text-ink-2">{going ? "Starting the agents…" : "No activity recorded."}</p> : (
-                <ol className="divide-y divide-line">
-                  {activity.map((e) => (
-                    <li key={e.seq} className="flex gap-3 px-4 py-2 text-sm">
-                      <span className="mt-0.5 shrink-0" style={{ color: EVENT_LOOK[e.type].color ?? "var(--muted)" }}><Icon name={EVENT_LOOK[e.type].icon} size={14} /></span>
-                      <span className="min-w-0 flex-1 break-words">{describe(e)}</span>
-                      <span className="tabular shrink-0 text-xs text-muted">{new Date(e.created_at).toLocaleTimeString()}</span>
-                    </li>
-                  ))}
-                </ol>
-              )}
-              {showLog && <pre className="max-h-96 overflow-auto border-t border-line bg-page p-3 font-mono text-xs text-ink-2">{log.map((e) => e.data.line).join("\n")}</pre>}
-            </Card>
+            {ai && (
+              <div className={`grid items-stretch gap-4 ${r.ai_mode === "contract" ? "lg:grid-cols-2" : ""}`}>
+                <AgentReportCard run={r} issues={issues} multi={ai.collections.length > 1 ? ai.collections.map((c) => c.name) : null} onOpenReport={() => setReportOpen(true)} />
+                {r.ai_mode === "contract" && <GapsCard run={r} />}
+              </div>
+            )}
+            {ai && <TestCasesCard run={r} />}
+            <ExecutionLogs events={events} going={going} />
+            {ai && <FullReportPanel run={r} issues={issues} events={events} open={reportOpen} onClose={() => setReportOpen(false)} onEmail={() => { setReportOpen(false); setEmailing(true); }} />}
           </>
         )}
       </div>

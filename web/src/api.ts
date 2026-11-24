@@ -58,12 +58,52 @@ export type AiCollectionResult = {
   name: string; uid: string | null; requests: number; assertions: number; failed_assertions: number;
   failures: { request: string; assertion: string; error: string }[];
   known_bugs: string[]; known_bugs_now_passing: string[]; circuit_breaker_tripped: boolean;
-  diagnoses: { request: string; assertion: string; category: string; confidence: string; evidence: string; fix_hint?: string }[];
+  diagnoses: Diagnosis[];
   changes: string[]; published: { uid: string; name: string } | null; updated: string | null;
+  // Every request's result (runs from before this was kept don't have it).
+  executions?: { request: string; case_id: string | null; method: string; status: number | null; error: string | null; passed: number; failed: number }[];
 };
+
+// ---- Debugging failures ----
+export type IssueCategory = "unexplained" | "api_bug" | "known_bug" | "test_defect" | "fixed" | "flaky";
+export type Cause = { title: string; likelihood: "high" | "medium" | "low"; explanation: string; evidence_for?: string[]; evidence_against?: string[] };
+export type Fix = { kind: "report_api_bug" | "change_test" | "fix_environment" | "clarify_contract"; title: string; detail: string; change?: string; recommended?: boolean };
+export type Diagnosis = { request: string; assertion: string; category: string; confidence: string; evidence: string; fix_hint?: string; causes?: Cause[]; fixes?: Fix[] };
+// One line per failure, on the run.
+export type IssueSummary = {
+  collection: number; request: string; case_id: string | null; category: IssueCategory; state: "failing" | "passing_now";
+  confidence: string | null; summary: string; status: number | null;
+};
+export type Header = { key: string; value: string };
+export type Exchange = {
+  method: string; url: string; status?: number; response_time_ms?: number; error?: string; body: string; at: string; response_size?: number;
+  assertions: { name: string; error?: string }[]; request_headers: Header[]; request_body: string; response_headers: Header[];
+};
+export type Probe = {
+  for_request: string | null; purpose: string | null; at: string; method: string; url: string; request_headers: Header[]; request_body: string;
+  status?: number; response_time_ms?: number; error?: string; response_body: string;
+};
+export type ContractGap = { key: string; text: string; endpoints: string[]; not_tested: string | null; contract_now: string | null; suggestion: string | null; intended?: boolean };
+// One failure's debug view.
+export type IssueDetail = {
+  run: { id: number; status: RunStatus; collection_name: string; environment_label: string; contract_id: number | null; created_at: string };
+  issue: {
+    request: string; case_id: string | null; state: "failing" | "passing_now"; category: IssueCategory; confidence: string | null;
+    exchange: Exchange | null; failed_assertions: { assertion: string; error: string }[]; test_script: string; prerequest_script: string;
+    probes: Probe[]; diagnoses: Diagnosis[]; changes: string[];
+  };
+  position: { index: number; total: number; previous: IssueRef | null; next: IssueRef | null };
+  history: { run_id: number; at: string; outcome: "passed" | "failed" | "not_run" | "unknown" }[];
+  logs: RunEvent[];
+  contract: { contract_id: number; key: string; method: string; path: string; summary: string | null; responses: string[]; secured: boolean; excerpt: string | null } | null;
+  gaps: ContractGap[];
+  knowledge: { title: string; text: string }[];
+};
+export type IssueRef = { collection: number; request: string; case_id: string | null };
 export type ContractCase = { id: string; endpoint?: string; type: string; title: string; request?: string; expected: string; contract_ref?: string };
 export type ContractPlan = {
-  collection_name: string; summary?: string; auth?: string; endpoints?: string[]; gaps?: string[]; cases: ContractCase[];
+  collection_name: string; summary?: string; auth?: string; endpoints?: string[];
+  gaps?: (string | { text: string; endpoints?: string[]; not_tested?: string; contract_now?: string; suggestion?: string })[]; cases: ContractCase[];
   endpoints_found?: { method: string; path: string; summary?: string }[];
 };
 export type Endpoint = { key: string; method: string; path: string; summary: string | null; operation_id: string | null; tags: string[]; parameters: number; has_body: boolean; responses: string[]; secured: boolean; deprecated: boolean };
@@ -102,6 +142,7 @@ export type Run = {
   result?:
     | { environment: { label: string; base_url: string }; executions: Execution[] }
     | { environment: { label: string; base_url: string }; collections: AiCollectionResult[]; report: string; cost_usd: number; server_issue: string | null;
+        issues?: IssueSummary[];
         contract?: { name: string; plan: ContractPlan | null; review_rounds: number; collection: any } }
     | null;
 };
@@ -214,6 +255,10 @@ export const api = {
   changes: () => request<HealerChange[]>("GET", "/changes"),
   answerApproval: (id: number, answer: string) => request<{ ok: true }>("POST", `/runs/${id}/approval`, { answer }),
   cancelRun: (id: number) => request<{ ok: true }>("POST", `/runs/${id}/cancel`),
+  runIssue: (id: number, ref: { collection: number; request: string }) =>
+    request<IssueDetail>("GET", `/runs/${id}/issue?collection=${ref.collection}&request=${encodeURIComponent(ref.request)}`),
+  runIssueBundleUrl: (id: number, ref: { collection: number; request: string }) =>
+    `/api/runs/${id}/issue/bundle?collection=${ref.collection}&request=${encodeURIComponent(ref.request)}`,
 
   emailSettings: () => request<EmailSettings>("GET", "/settings/email"),
   saveEmailSettings: (s: Omit<EmailSettings, "configured" | "has_password"> & { password: string | null }) => request<EmailSettings>("PUT", "/settings/email", s),
@@ -245,6 +290,9 @@ export const api = {
   publishRun: (runId: number, workspace_id: string, target: PublishTarget, environments: { label: string; base_url: string }[] = [], add_to_dashboard = false) =>
     request<{ workspace: { id: string; name: string }; collection: { uid: string; name: string; id: number | null }; folder: string | null; requests: number;
       environments: { label: string; postman_uid: string | null; dashboard_id: number | null }[]; credential_variables: AuthVariable[] }>("POST", `/runs/${runId}/publish`, { workspace_id, target, environments, add_to_dashboard }),
+  contractGaps: (id: number, runId?: number) =>
+    request<{ run: { id: number; status: RunStatus; created_at: string } | null; gaps: ContractGap[] }>("GET", `/contracts/${id}/gaps${runId ? `?run=${runId}` : ""}`),
+  setGapIntended: (id: number, key: string, intended: boolean) => request<{ key: string; intended: boolean }>("PUT", `/contracts/${id}/gaps/${key}`, { intended }),
   runPublications: (runId: number) => request<Publication[]>("GET", `/runs/${runId}/publications`),
 
   dashboard: (days = 30) => request<Dashboard>("GET", `/dashboard?days=${days}`),

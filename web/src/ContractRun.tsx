@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { api, type ContractCase, type ContractPlan, type Run } from "./api.ts";
 import { dateTime } from "./format.ts";
-import { Button, Card, ErrorNote, Field, Icon, Modal, Spinner, inputClass, useToast } from "./ui.tsx";
+import { Button, ErrorNote, Field, Icon, Modal, Spinner, inputClass, useToast } from "./ui.tsx";
 
 const TYPES = ["setup", "positive", "negative", "security", "edge", "cleanup"];
 const TYPE_COLOR: Record<string, string> = { positive: "var(--status-good)", negative: "var(--status-critical)", security: "var(--status-serious)", edge: "var(--status-warning)" };
@@ -21,7 +21,7 @@ function PlanFacts({ plan }: { plan: ContractPlan }) {
       {!!plan.gaps?.length && (
         <div>
           <div className="flex items-center gap-1.5 text-xs font-medium text-warn-ink"><Icon name="alert" size={12} />Where the contract is silent or unclear (not tested)</div>
-          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-ink-2">{plan.gaps.map((g, i) => <li key={i}>{g}</li>)}</ul>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-ink-2">{plan.gaps.map((g, i) => <li key={i}>{typeof g === "string" ? g : g.text}</li>)}</ul>
         </div>
       )}
     </div>
@@ -142,7 +142,9 @@ export function GroupCheckbox({ checked, partial, label, onChange }: { checked: 
 }
 
 // After the run: what was approved, and where it went (or a button to choose).
-export function ContractOutcome({ run }: { run: Run }) {
+// Contract runs, once finished: whether the tests can go to Postman, and where they went. Shown in the
+// run page's outcome bar; the test cases themselves are in the run page's Test cases card.
+export function PublishStatus({ run }: { run: Run }) {
   const result = run.result && "collections" in run.result ? run.result : null;
   const c = result?.contract;
   const pubs = useQuery({ queryKey: ["run-publications", run.id], queryFn: () => api.runPublications(run.id) });
@@ -150,39 +152,31 @@ export function ContractOutcome({ run }: { run: Run }) {
   if (!c) return null;
   const built = c.collection;
   const publishable = ["passed", "passed_with_known_bugs"].includes(run.status) && !!built?.item?.length;
+  const unexplained = (result?.issues ?? []).filter((i) => i.category === "unexplained").length;
   return (
-    <>
-      <Card title="Add to Postman">
-        <div className="space-y-3 p-4 text-sm">
+    <div className="flex flex-wrap items-start justify-between gap-3 text-sm">
+      <div className="flex min-w-0 flex-1 basis-60 gap-3">
+        <Icon name={pubs.data?.length ? "check" : publishable ? "upload" : "alert"} size={18}
+          className={`mt-0.5 shrink-0 ${pubs.data?.length ? "text-good" : publishable ? "text-accent" : "text-warn-ink"}`} />
+        <div className="min-w-0 space-y-1">
+          <div className="font-semibold">{pubs.data?.length ? "Added to Postman" : publishable ? "Ready for Postman" : "Not added to Postman"}</div>
           {pubs.data?.map((p) => (
-            <p key={p.id} className="flex items-start gap-2"><Icon name="check" className="mt-0.5 shrink-0 text-good" />
-              <span>Added {p.requests} requests to <strong>{p.workspace_name ?? p.workspace_id}</strong> → {p.folder_name ? <>folder <strong>{p.folder_name}</strong> in </> : null}collection <strong>{p.collection_name}</strong> <span className="text-xs text-muted">({dateTime(p.published_at)})</span></span></p>
+            <p key={p.id} className="text-ink-2">{p.requests} requests in <strong className="text-ink">{p.workspace_name ?? p.workspace_id}</strong> → {p.folder_name ? <>folder <strong className="text-ink">{p.folder_name}</strong> in </> : null}<strong className="text-ink">{p.collection_name}</strong> <span className="text-xs text-muted">({dateTime(p.published_at)})</span></p>
           ))}
-          {run.collection.id && <p><Link to={`/collections/${run.collection.id}`} className="text-accent hover:underline">Open it in Collections</Link> to run, schedule and email it like any other.</p>}
-          {publishable ? (
-            <>
-              {!pubs.data?.length && <p className="text-ink-2">The collection is built and checked{run.status === "passed_with_known_bugs" ? "; its only failures are contract violations marked as known bugs" : ""}. Nothing is in Postman yet: choose where it goes.</p>}
-              <Button variant={pubs.data?.length ? "secondary" : "primary"} icon="upload" onClick={() => setPublishing(true)}>{pubs.data?.length ? "Add it somewhere else too" : "Choose where to add it"}</Button>
-            </>
-          ) : (
-            <p className="flex items-start gap-2 text-ink-2"><Icon name="alert" className="mt-0.5 shrink-0 text-warn-ink" />
-              {!built?.item?.length ? "No collection was built in this run." : "It can't be added to Postman: some failures aren't explained (not test mistakes the self-healer fixed, nor contract violations marked as known bugs). Check the report above, fix the environment or the contract, and generate the tests again."}</p>
+          {!pubs.data?.length && (
+            <p className="text-ink-2">{!built?.item?.length ? "No collection was built in this run."
+              : publishable ? `The collection is built and checked${run.status === "passed_with_known_bugs" ? "; its only failures are known bugs" : ""}. Choose where it goes.`
+              : `${unexplained ? `${unexplained} failure${unexplained === 1 ? " is" : "s are"} unexplained` : "Some failures aren't explained"}. Fix the environment or the contract, then generate again.`}</p>
           )}
+          {run.collection.id && <p><Link to={`/collections/${run.collection.id}`} className="text-accent hover:underline">Open it in Collections</Link></p>}
         </div>
-      </Card>
-      {c.plan && (
-        <Card title={`Test cases (${c.plan.cases.length}${c.review_rounds > 1 ? `, after ${c.review_rounds} reviews` : ""})`}>
-          <div className="space-y-3 p-4">
-            <PlanFacts plan={c.plan} />
-            <ul className="divide-y divide-line text-sm">{c.plan.cases.map((x) => (
-              <li key={x.id} className="py-1.5"><span className="font-mono text-xs text-muted">{x.id}</span> <span className="text-xs text-ink-2">{x.type} · {x.endpoint}</span><div>{x.title} <span className="text-ink-2">→ {x.expected}</span></div></li>
-            ))}</ul>
-          </div>
-        </Card>
-      )}
+      </div>
+      <Button variant={pubs.data?.length || !publishable ? "secondary" : "primary"} icon="upload" disabled={!publishable} onClick={() => setPublishing(true)}>
+        {pubs.data?.length ? "Add it somewhere else too" : "Add to Postman"}
+      </Button>
       {publishing && <PublishDialog run={run} defaultName={c.plan?.collection_name ?? `${c.name} Contract Tests`} contractName={c.name} requests={countRequests(built?.item)}
         testBaseUrl={(result as any)?.environment?.base_url ?? ""} onClose={() => setPublishing(false)} />}
-    </>
+    </div>
   );
 }
 

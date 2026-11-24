@@ -3,8 +3,9 @@
 // builds and checks a collection; you choose the Postman workspace and collection it goes to.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate, useParams } from "react-router";
-import { api, type ContractCheck, type ContractDetail, type Endpoint, type Environment } from "../api.ts";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
+import { api, type ContractCheck, type ContractDetail, type ContractGap, type Endpoint, type Environment } from "../api.ts";
+import { EndpointChips } from "../RunParts.tsx";
 import { dateTime, money, relativeTime } from "../format.ts";
 import { GroupCheckbox } from "../ContractRun.tsx";
 import { Button, Card, EmptyState, ErrorNote, Field, Icon, MethodBadge, Modal, PageHeader, Spinner, StatusBadge, inputClass, useToast } from "../ui.tsx";
@@ -150,7 +151,11 @@ export function ContractPage() {
   const q = useQuery({ queryKey: ["contracts", id], queryFn: () => api.contract(id) });
   const [selected, setSelected] = useState<Set<string> | null>(null); // null: all
   const [filter, setFilter] = useState("");
+  const [onlyGaps, setOnlyGaps] = useState(false);
   const [generating, setGenerating] = useState(false);
+  // Opened from a run (?gaps=<run id>): that run's gaps in the contract, at the top, and on the endpoints.
+  const gapsRun = Number(useSearchParams()[0].get("gaps")) || undefined;
+  const gapsQ = useQuery({ queryKey: ["contract-gaps", id, gapsRun], queryFn: () => api.contractGaps(id, gapsRun), enabled: !!gapsRun });
   const [confirmDelete, setConfirmDelete] = useState(false);
   const refresh = useMutation({
     mutationFn: () => api.refreshContract(id),
@@ -166,7 +171,13 @@ export function ContractPage() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["contracts"] }); navigate("/contracts"); toast("ok", "Contract deleted. Its runs and what was published stay."); },
   });
   const c = q.data;
-  const shown = useMemo(() => (c?.endpoints ?? []).filter((e) => !filter || `${e.key} ${e.summary ?? ""} ${e.tags.join(" ")}`.toLowerCase().includes(filter.toLowerCase())), [c, filter]);
+  // Each endpoint's open gaps, numbered as they are listed (G1, G2, …).
+  const gapsByEndpoint = useMemo(() => {
+    const m = new Map<string, string[]>();
+    (gapsQ.data?.gaps ?? []).forEach((g, k) => { if (!g.intended) for (const e of g.endpoints) m.set(e, [...(m.get(e) ?? []), `G${k + 1}`]); });
+    return m;
+  }, [gapsQ.data]);
+  const shown = useMemo(() => (c?.endpoints ?? []).filter((e) => (!filter || `${e.key} ${e.summary ?? ""} ${e.tags.join(" ")}`.toLowerCase().includes(filter.toLowerCase())) && (!onlyGaps || gapsByEndpoint.has(e.key))), [c, filter, onlyGaps, gapsByEndpoint]);
   // Groups: the spec's first tag (e.g. pet, store, user), or else the path's first part.
   const groups = useMemo(() => {
     const m = new Map<string, Endpoint[]>();
@@ -221,6 +232,7 @@ export function ContractPage() {
         </>} />
 
       <div className="space-y-4">
+        {gapsRun && <GapsSection contractId={c.id} runId={gapsRun} q={gapsQ} />}
         {c.last_changes && <ChangesNote ch={c.last_changes} />}
         {c.warnings.length > 0 && (
           <div className="rounded-xl border border-line bg-card px-4 py-3 text-sm">
@@ -232,6 +244,7 @@ export function ContractPage() {
             {c.format === "document" ? <DocumentCard c={c} /> : (
               <Card title={<span>Endpoints <span className="font-normal text-muted">· {count} of {all.length} selected for testing</span></span>}
                 actions={<div className="flex gap-1">
+                  {gapsByEndpoint.size > 0 && <Button size="sm" variant={onlyGaps ? "secondary" : "ghost"} icon="alert" aria-pressed={onlyGaps} onClick={() => setOnlyGaps((v) => !v)}>With gaps ({gapsByEndpoint.size})</Button>}
                   <Button size="sm" variant="ghost" icon="check" disabled={allShownOn} onClick={() => selectShown(true)}>{filter ? "Select shown" : "Select all"}</Button>
                   <Button size="sm" variant="ghost" icon="x" disabled={noneShownOn} onClick={() => selectShown(false)}>{filter ? "Deselect shown" : "Deselect all"}</Button>
                 </div>}>
@@ -246,12 +259,12 @@ export function ContractPage() {
                         {g} <span className="font-normal text-muted">({on}/{eps.length})</span>
                       </label>
                       <ul className="divide-y divide-line">
-                        {eps.map((e) => <EndpointRow key={e.key} e={e} on={isOn(e.key)} toggle={(shift) => toggle(e.key, shift)} />)}
+                        {eps.map((e) => <EndpointRow key={e.key} e={e} on={isOn(e.key)} gaps={gapsByEndpoint.get(e.key)} toggle={(shift) => toggle(e.key, shift)} />)}
                       </ul>
                     </div>
                   );
                 })}
-                {shown.length === 0 && <p className="px-4 py-4 text-sm text-ink-2">No endpoint matches "{filter}".</p>}
+                {shown.length === 0 && <p className="px-4 py-4 text-sm text-ink-2">{filter ? `No endpoint matches "${filter}"${onlyGaps ? " among those with gaps" : ""}.` : "No endpoint has an open gap."}</p>}
                 {count === 0 && <p className="border-t border-line px-4 py-3 text-sm text-ink-2">Select at least one endpoint to generate tests.</p>}
               </Card>
             )}
@@ -295,7 +308,7 @@ export function ContractPage() {
   );
 }
 
-function EndpointRow({ e, on, toggle }: { e: Endpoint; on: boolean; toggle: (shift: boolean) => void }) {
+function EndpointRow({ e, on, gaps, toggle }: { e: Endpoint; on: boolean; gaps?: string[]; toggle: (shift: boolean) => void }) {
   return (
     <li>
       <label className={`flex cursor-pointer select-none items-start gap-3 px-4 py-2.5 hover:bg-raised ${on ? "" : "opacity-60"}`}>
@@ -307,6 +320,13 @@ function EndpointRow({ e, on, toggle }: { e: Endpoint; on: boolean; toggle: (shi
           <span className="block truncate text-xs text-ink-2">{e.summary ?? <span className="text-muted">No summary</span>}</span>
         </span>
         <span className="flex shrink-0 flex-wrap justify-end gap-1">
+          {gaps && (
+            <a href={`#gap-${gaps[0]}`} onClick={(ev) => { ev.preventDefault(); document.getElementById(`gap-${gaps[0]}`)?.scrollIntoView({ behavior: "smooth", block: "center" }); }}
+              title={`Contract gap${gaps.length === 1 ? "" : "s"} ${gaps.join(", ")}`}
+              className="inline-flex items-center gap-1 rounded-full px-2 text-[11px] font-medium text-warn-ink" style={{ background: "color-mix(in srgb, var(--warn-ink) 14%, transparent)" }}>
+              <Icon name="alert" size={11} />{gaps.length === 1 ? `1 gap · ${gaps[0]}` : `${gaps.length} gaps · ${gaps.join(", ")}`}
+            </a>
+          )}
           {e.secured && <span title="Needs authentication" className="text-muted"><Icon name="lock" size={13} /><span className="sr-only">needs authentication</span></span>}
           {e.responses.slice(0, 4).map((r) => <span key={r} className="rounded bg-raised px-1 font-mono text-[11px] text-ink-2 ring-1 ring-line">{r}</span>)}
         </span>
@@ -522,5 +542,90 @@ function NewEnvironmentForm({ c, suggested, onCancel, onCreated }: { c: Contract
       <ErrorNote error={create.error} />
       <div className="flex gap-2"><Button type="submit" variant="primary" busy={create.isPending}>Create and use it</Button><Button type="button" variant="ghost" onClick={onCancel}>Back</Button></div>
     </form>
+  );
+}
+
+// ---- Gaps a contract run found: where the contract is silent or unclear, so nothing was tested ----
+function GapsSection({ contractId, runId, q }: { contractId: number; runId: number; q: ReturnType<typeof useQuery<{ run: { id: number } | null; gaps: ContractGap[] }>> }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const decide = useMutation({
+    mutationFn: ({ key, intended }: { key: string; intended: boolean }) => api.setGapIntended(contractId, key, intended),
+    onSuccess: (r) => { qc.invalidateQueries({ queryKey: ["contract-gaps", contractId] }); toast("ok", r.intended ? "Marked as intended: future runs won't raise it" : "Reopened"); },
+    onError: (e) => toast("error", e.message),
+  });
+  // Arriving with #gap-<key> (from the run page): open that gap and bring it into view.
+  useEffect(() => {
+    const key = location.hash.match(/^#gap-([0-9a-f]{12})$/)?.[1];
+    if (!key || !q.data) return;
+    setOpen((s) => new Set(s).add(key));
+    requestAnimationFrame(() => document.getElementById(`gap-${key}`)?.scrollIntoView({ block: "center" }));
+  }, [q.data]);
+  const gaps = q.data?.gaps ?? [];
+  const openCount = gaps.filter((g) => !g.intended).length;
+  const suggestions = gaps.filter((g) => !g.intended && g.suggestion);
+  const copyAll = () => navigator.clipboard.writeText(suggestions.map((g) => `# ${g.text}\n${g.endpoints.length ? `(${g.endpoints.join(", ")})\n` : ""}${g.suggestion}`).join("\n\n"))
+    .then(() => toast("ok", "Suggestions copied"), () => toast("error", "Couldn't copy: your browser blocked it"));
+  const toggle = (key: string) => setOpen((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  return (
+    <section aria-labelledby="gaps-title" className="rounded-xl border bg-card" style={{ borderColor: "color-mix(in srgb, var(--warn-ink) 45%, transparent)" }}>
+      <header className="flex flex-wrap items-center justify-between gap-2 rounded-t-xl border-b border-line px-4 py-3" style={{ background: "color-mix(in srgb, var(--warn-ink) 6%, transparent)" }}>
+        <div className="flex flex-wrap items-center gap-2">
+          <Icon name="alert" className="text-warn-ink" />
+          <h2 id="gaps-title" className="font-semibold">Gaps found in <Link to={`/runs/${runId}`} className="text-accent hover:underline">Run #{runId}</Link></h2>
+          {q.data && <span className="rounded-full px-2 py-0.5 text-xs text-warn-ink" style={{ background: "color-mix(in srgb, var(--warn-ink) 14%, transparent)" }}>{openCount} open</span>}
+          <span className="text-sm text-ink-2">not tested because the contract is silent or unclear</span>
+        </div>
+        <Link to={`/runs/${runId}`} className="text-sm text-accent hover:underline">← Back to Run #{runId}</Link>
+      </header>
+      {q.isPending ? <div className="flex justify-center py-8 text-muted"><Spinner /></div> : q.error ? <div className="p-4"><ErrorNote error={q.error} /></div>
+        : !q.data?.run ? <p className="px-4 py-4 text-sm text-ink-2">That run isn't a run of this contract.</p>
+        : gaps.length === 0 ? <p className="px-4 py-4 text-sm text-ink-2">The analyst found nothing silent or unclear in what it tested.</p> : (
+        <ul className="divide-y divide-line">
+          {gaps.map((g, k) => {
+            const expanded = open.has(g.key);
+            const canSuggest = !!(g.contract_now || g.suggestion);
+            return (
+              <li key={g.key} id={`gap-${g.key}`} className={`scroll-mt-24 px-4 py-3 ${g.intended ? "opacity-60" : ""}`}>
+                <span id={`gap-G${k + 1}`} className="scroll-mt-24" />
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1 basis-96">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-xs text-muted">G{k + 1}</span>
+                      {g.endpoints.length > 0 && <EndpointChips keys={g.endpoints} />}
+                      {g.intended && <span className="rounded-full bg-raised px-2 py-0.5 text-xs text-ink-2 ring-1 ring-line">Marked as intended</span>}
+                    </div>
+                    <p className="mt-1.5 text-sm">{g.text}</p>
+                    {g.not_tested && <p className="mt-0.5 text-xs text-muted">Not tested: {g.not_tested}</p>}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {canSuggest && <Button size="sm" aria-expanded={expanded} onClick={() => toggle(g.key)}>{expanded ? "Hide suggestion" : "Suggest a fix"}</Button>}
+                    <Button size="sm" variant="ghost" busy={decide.isPending && decide.variables?.key === g.key} onClick={() => decide.mutate({ key: g.key, intended: !g.intended })}>{g.intended ? "Reopen" : "This is intended"}</Button>
+                  </div>
+                </div>
+                {expanded && canSuggest && (
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <div><div className="text-xs font-semibold uppercase tracking-wide text-muted">Contract today</div>
+                      <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded-lg bg-page p-3 font-mono text-xs text-ink-2 ring-1 ring-line">{g.contract_now ?? "(not quoted by the analyst)"}</pre></div>
+                    <div>
+                      <div className="flex justify-between gap-2"><span className="text-xs font-semibold uppercase tracking-wide text-muted">Suggested wording</span>
+                        {g.suggestion && <button className="text-xs text-accent hover:underline" onClick={() => navigator.clipboard.writeText(g.suggestion!).then(() => toast("ok", "Suggestion copied"))}>Copy</button>}</div>
+                      <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded-lg border p-3 font-mono text-xs" style={{ background: "color-mix(in srgb, var(--status-good) 8%, var(--page))", borderColor: "color-mix(in srgb, var(--status-good) 35%, transparent)" }}>{g.suggestion ?? "(no suggestion)"}</pre>
+                    </div>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {gaps.length > 0 && (
+        <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-4 py-3 text-sm text-ink-2">
+          <span>Fix them in the contract, then upload a new version. The next run tests what the contract now answers.</span>
+          {suggestions.length > 0 && <Button size="sm" icon="copy" onClick={copyAll}>Copy all suggestions</Button>}
+        </footer>
+      )}
+    </section>
   );
 }
