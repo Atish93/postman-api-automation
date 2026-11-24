@@ -206,6 +206,9 @@ const migrations: string[] = [
   ALTER TABLE runs ADD COLUMN contract_id INTEGER REFERENCES contracts(id) ON DELETE SET NULL;
   ALTER TABLE runs ADD COLUMN contract_endpoints TEXT;   -- JSON array of the endpoint keys chosen (null: all)
   `,
+  `
+  ALTER TABLE contracts ADD COLUMN gap_decisions TEXT;   -- JSON: { <gap key>: { intended, at } }, gaps a person marked as intended
+  `,
 ];
 
 export function openDb(path = process.env.QA_DB ?? fileURLToPath(new URL("../data/qa.db", import.meta.url))): DB {

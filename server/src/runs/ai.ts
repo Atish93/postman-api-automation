@@ -14,6 +14,7 @@ import { importFromPostman } from "../collections.ts";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { authOf, resolveServers } from "../contracts.ts";
+import { contractGaps } from "../debug.ts";
 
 type Emit = (type: string, data: Record<string, unknown>) => void;
 export type AiHandle = { done: Promise<RunOutcome>; answer: (text: string) => boolean; cancel: () => boolean };
@@ -42,6 +43,8 @@ export function runAi(db: DB, run: RunRow, emit: Emit): AiHandle {
       auth: spec ? authOf(spec) : null, base_url: env.baseUrl,
       selected: run.contract_endpoints ? JSON.parse(run.contract_endpoints) : null,
       focus: run.request ?? null,
+      // Gaps a person marked as intended in earlier runs: the analyst doesn't raise them again.
+      intended_gaps: contractGaps(db, c.id).gaps.filter((g) => g.intended).map((g) => g.text),
       spec, text: c.format === "document" ? c.text : null,
     }));
     args = ["--contract", file];
@@ -165,7 +168,7 @@ export async function linkPublishedCollection(db: DB, runId: number, result: any
 }
 
 // The stored contract's spec as an object (it was checked when the contract was added).
-function specOf(c: any) {
+export function specOf(c: any) {
   const text = Buffer.from(c.original).toString("utf8").replace(/^\uFEFF/, "").trim();
   return text.startsWith("{") ? JSON.parse(text) : parseYaml(text, { maxAliasCount: 100 });
 }

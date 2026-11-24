@@ -4,6 +4,7 @@ import { z } from "zod";
 import { now, type DB } from "../db.ts";
 import { HttpError } from "../errors.ts";
 import { FINISHED, type RunManager } from "../runs/manager.ts";
+import { issueDetail, lightResult } from "../debug.ts";
 
 const view = (r: any, withResult = false) => ({
   id: r.id, kind: r.kind, ai_mode: r.ai_mode ?? null, request: r.request ?? null, status: r.status, message: r.message,
@@ -16,7 +17,8 @@ const view = (r: any, withResult = false) => ({
   cost_usd: r.cost_usd, exit_code: r.exit_code,
   created_at: r.created_at, started_at: r.started_at, finished_at: r.finished_at,
   duration_ms: r.started_at && r.finished_at ? Date.parse(r.finished_at) - Date.parse(r.started_at) : null,
-  ...(withResult && { result: r.result_json ? JSON.parse(r.result_json) : null }),
+  // The heavy per-failure debug bundles stay on the server; the run page gets one summary line per failure.
+  ...(withResult && { result: r.result_json ? lightResult(JSON.parse(r.result_json)) : null }),
 });
 
 // A data file can drive a plain run of its own collection.
@@ -180,6 +182,25 @@ export function runsRoutes(app: FastifyInstance, db: DB, runs: RunManager) {
     if (!answer.startsWith("{") && answer.length > 5000) throw new HttpError(400, "Keep feedback under 5000 characters.");
     if (!runs.answerApproval(id, answer)) throw new HttpError(409, "This run isn't waiting for an approval.");
     return { ok: true };
+  });
+
+  // One failure's debug view: what was sent and received, the debugger's probes, likely causes and fixes,
+  // its history across runs, the log lines about it, and (contract runs) what the contract says.
+  const IssueQuery = z.object({ request: z.string().min(1), collection: z.coerce.number().int().min(0).default(0) });
+  const issueOf = (id: number, query: unknown) => {
+    const q = IssueQuery.parse(query);
+    const d = issueDetail(db, getRow(id), q.collection, q.request);
+    if (!d) throw new HttpError(404, "That failure isn't in this run.");
+    return d;
+  };
+  app.get<{ Params: { id: string } }>("/api/runs/:id/issue", async (req) => issueOf(Number(req.params.id), req.query));
+
+  // The same, as a file to attach to a bug report.
+  app.get<{ Params: { id: string } }>("/api/runs/:id/issue/bundle", async (req, reply) => {
+    const d = issueOf(Number(req.params.id), req.query);
+    const name = `run-${d.run.id}-${(d.issue.case_id ?? d.issue.request).replace(/[^\w.-]+/g, "_").slice(0, 60)}-debug.json`;
+    reply.header("content-type", "application/json").header("content-disposition", `attachment; filename="${name}"`);
+    return JSON.stringify(d, null, 2);
   });
 
   app.post<{ Params: { id: string } }>("/api/runs/:id/cancel", async (req) => {

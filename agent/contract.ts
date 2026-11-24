@@ -86,7 +86,8 @@ export const contractOverview = tool(
   async () => {
     const c = need();
     const scope = c.selected?.length ? c.selected : null;
-    const base = { name: c.name, title: c.title, api_version: c.api_version, format: c.format, servers: c.servers, focus_from_the_person: c.focus, endpoints_to_test: scope ?? "all" };
+    const base = { name: c.name, title: c.title, api_version: c.api_version, format: c.format, servers: c.servers, focus_from_the_person: c.focus, endpoints_to_test: scope ?? "all",
+      gaps_marked_intended: (c as any).intended_gaps ?? [] };
     if (c.format === "openapi") {
       const sec = c.spec?.components?.securitySchemes ?? c.spec?.securityDefinitions ?? {};
       const eps = c.endpoints.filter((e) => !scope || scope.includes(e.key));
