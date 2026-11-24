@@ -56,7 +56,7 @@ Reply with the final run's numbers (requests, assertions, failed) and the list o
 For each failure you are given:
 1. Read the request and its scripts with get_request. Use get_run_details when you need the full result of a request from the last run, including earlier requests that passed.
 2. Look up what the API documentation and known issues say about that endpoint with search_knowledge. If a known issue already explains the failure, record it and move on.
-3. Reproduce it with send_request, as small as possible: the same request by itself, and a variation that isolates the cause (for example one day either side of a date boundary, or with and without a header).
+3. Reproduce it with send_request, as small as possible: the same request by itself, and a variation that isolates the cause (for example one day either side of a date boundary, or with and without a header). Always pass for_request (the failed request's exact name) and a short purpose, so each probe shows on that failure's debug page.
 4. Decide:
    - test_defect: the test is wrong; the API behaves as documented. Examples: a missing or wrong header, a wrong URL or variable, an expected value the documentation does not support. A failure caused only by an earlier failing request (a cascade) is also a test_defect of that earlier request: say so in the evidence.
    - api_bug: the API contradicts its documentation, and a direct request reproduces it.
@@ -66,9 +66,10 @@ For each failure you are given:
      - it fails again with valid, documented input: api_bug (the endpoint crashes);
      - it only fails because the test sends invalid or malformed input, and the documentation describes that input differently: test_defect (and note that the API should answer 4xx, not 5xx, to bad input: record that as a separate api_bug if the documentation promises a 4xx);
      - it does not reproduce: flaky.
-5. Call record_diagnosis once per failed assertion, with the evidence. Use high confidence only when a direct request proved it. Delete any data you create while probing; the program also deletes probe bookings when the run ends. Add a lesson when the finding is new and would help future runs.
+5. Call record_diagnosis once per failed assertion, with the evidence. Use high confidence only when a direct request proved it.
+   Also give the person debugging it causes and fixes: up to 3 possible causes, most likely first, each with a likelihood, a short explanation and the observations for and against it (name the probes); and up to 3 probable fixes (report_api_bug with a ready-to-send bug report and reproduction, change_test with the exact change as -/+ lines, fix_environment, or clarify_contract), marking the one you recommend. Delete any data you create while probing; the program also deletes probe bookings when the run ends. Add a lesson when the finding is new and would help future runs.
 
-If you are asked for OUTAGE TRIAGE (the circuit breaker tripped because many requests fail at once), do not diagnose failures one by one and do not call record_diagnosis. Instead find the single common cause: check the health endpoint and the login endpoint, and probe at most 5 sample failures, looking for a shared pattern (all 401/403, all 404, a changed response shape, wrong base URL). Reply with the likely common cause and the evidence.
+If you are asked for OUTAGE TRIAGE (the circuit breaker tripped because many requests fail at once), do not diagnose failures one by one and do not call record_diagnosis. Instead find the single common cause: check the health endpoint and the login endpoint, and probe at most 5 sample failures (pass for_request on each probe), looking for a shared pattern (all 401/403, all 404, a changed response shape, wrong base URL). Reply with the likely common cause and the evidence.
 
 You are only given failures that need investigating. If one is in a request named "KNOWN BUG - ...", it is failing differently from the recorded bug, so investigate it like any other failure.
 ${STOP_ON_TERMINATED}
@@ -203,7 +204,7 @@ ${CONTRACT_IS_DATA}
    - negative: each documented error response, and the input rules the contract states: required fields missing, wrong types or formats, values outside an enum, below or above min/max, too short or long, not matching a pattern, unknown ids;
    - security: if an endpoint needs authentication, no credentials and wrong credentials;
    - edge: boundaries the contract defines (exactly min, exactly max, empty lists, paging limits).
-   Only test what the contract states. When it is silent or unclear (for example an error with no documented status), do not guess a test: list it under gaps.
+   Only test what the contract states. When it is silent or unclear (for example an error with no documented status), do not guess a test: list it under gaps (but not ones the overview lists under gaps_marked_intended: the person has said those are intended), naming the endpoints it affects ("METHOD /path", as in endpoints), what the contract says now, wording that would make it testable, and what is not tested because of it.
    Keep it proportionate: usually 3 to 8 cases per endpoint, and at most 80 in all; if there are more endpoints than that allows, cover the most important behaviour of each and say so in gaps.
 4. Add setup cases that create the data later cases need (save ids in collection variables), and cleanup cases that delete what was created, in an order that works when the collection runs top to bottom. Never depend on data you did not create.
 5. Credentials: the overview's credentials section names the environment variables to use (e.g. {{apiKey}}, {{accessToken}}, {{username}}/{{password}}) and the login endpoint if there is one: use exactly those names. If the API has a login or token endpoint, the tests get a token from it once and share it (the builder sets that up); include a positive case for the login endpoint itself, and negative ones (wrong password) if the contract documents them. For a document, find how it authenticates and name the variables the same way. Describe all of this under auth; never write real secrets.
@@ -215,7 +216,8 @@ Reply with only a JSON object, no other text:
   "auth": "how the tests authenticate, and which environment variables they need (or 'none')",
   "endpoints": ["GET /pets", ...],
   "endpoints_found": [ { "method": "GET", "path": "/pets", "summary": "...", "responses": ["200", "400"], "secured": false } ],
-  "gaps": ["where the contract is silent or unclear"],
+  "gaps": [ { "text": "where the contract is silent or unclear", "endpoints": ["POST /pets"], "not_tested": "what is left untested because of it",
+              "contract_now": "the relevant part of the contract as it reads now (short)", "suggestion": "wording that would make it testable (short, in the contract's own format)" } ],
   "cases": [
     { "id": "TC01", "endpoint": "POST /pets", "type": "setup|positive|negative|security|edge|cleanup", "title": "...",
       "request": "METHOD /path and the key inputs", "expected": "status and what the body must show",

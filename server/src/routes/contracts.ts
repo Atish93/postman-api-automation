@@ -12,6 +12,7 @@ import { encrypt } from "../secrets.ts";
 import { importFromPostman } from "../collections.ts";
 import { countRequests } from "./postman.ts";
 import { audit } from "../audit.ts";
+import { contractGaps } from "../debug.ts";
 
 const json = (s: string | null) => (s ? JSON.parse(s) : null);
 
@@ -178,6 +179,29 @@ export function contractRoutes(app: FastifyInstance, db: DB) {
     db.prepare("DELETE FROM contracts WHERE id = ?").run(c.id); // its runs and publications stay
     audit(db, { actor: "admin", ip: req.ip, action: "contract.delete", summary: `Deleted contract "${c.name}"`, details: { contract_id: c.id } });
     reply.code(204);
+  });
+
+  // ---- Gaps: where a contract run found the contract silent or unclear ----
+  // From one run (?run=<id>) or the contract's latest run, with the gaps a person marked as intended.
+  app.get<{ Params: { id: string }; Querystring: { run?: string } }>("/api/contracts/:id/gaps", async (req) => {
+    const c = get(Number(req.params.id));
+    const runId = req.query.run ? Number(req.query.run) : undefined;
+    if (runId !== undefined && !Number.isInteger(runId)) throw new HttpError(400, "run must be a run id.");
+    return contractGaps(db, c.id, runId);
+  });
+
+  // "This is intended": the gap is not a problem, so it stops being flagged (and the analyst is told).
+  app.put<{ Params: { id: string; key: string } }>("/api/contracts/:id/gaps/:key", async (req) => {
+    const c = get(Number(req.params.id));
+    const { intended } = z.object({ intended: z.boolean() }).parse(req.body);
+    if (!/^[0-9a-f]{12}$/.test(req.params.key)) throw new HttpError(400, "Unknown gap.");
+    const decisions = json(c.gap_decisions) ?? {};
+    if (intended) decisions[req.params.key] = { intended: true, at: now() };
+    else delete decisions[req.params.key];
+    db.prepare("UPDATE contracts SET gap_decisions = ? WHERE id = ?").run(JSON.stringify(decisions), c.id);
+    audit(db, { actor: "admin", ip: req.ip, action: intended ? "contract.gap_intended" : "contract.gap_reopened",
+      summary: `${intended ? "Marked a gap as intended" : "Reopened a gap"} in contract "${c.name}"`, details: { contract_id: c.id, gap: req.params.key } });
+    return { key: req.params.key, intended };
   });
 
   // ---- Publishing what a contract run built: only where the person says, after they confirm ----

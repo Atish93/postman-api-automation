@@ -216,6 +216,62 @@ export function Modal({ open, onClose, title, children, footer, wide }: { open: 
   );
 }
 
+// A panel that slides over the page from the right (e.g. the full report). Esc or a click outside closes it.
+export function Drawer({ open, onClose, title, subtitle, children, footer }: { open: boolean; onClose: () => void; title: string; subtitle?: ReactNode; children: ReactNode; footer?: ReactNode }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const d = ref.current;
+    if (!d) return;
+    if (open && !d.open) d.showModal();
+    if (!open && d.open) d.close();
+  }, [open]);
+  return (
+    <dialog
+      ref={ref}
+      onClose={onClose}
+      onClick={(e) => e.target === ref.current && onClose()}
+      className="my-0 ml-auto mr-0 h-dvh max-h-dvh w-full max-w-2xl border-l border-line bg-page p-0 text-ink shadow-2xl backdrop:bg-black/50"
+    >
+      {open && (
+        <div className="flex h-full flex-col">
+          <header className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
+            <div className="min-w-0"><h2 className="text-lg font-semibold">{title}</h2>{subtitle && <div className="text-sm text-ink-2">{subtitle}</div>}</div>
+            <button onClick={onClose} className="rounded-lg p-2 text-muted ring-1 ring-line hover:text-ink" aria-label="Close"><Icon name="x" /></button>
+          </header>
+          <div className="flex-1 overflow-y-auto px-5 py-5">{children}</div>
+          {footer && <footer className="flex flex-wrap gap-2 border-t border-line px-5 py-3">{footer}</footer>}
+        </div>
+      )}
+    </dialog>
+  );
+}
+
+// Filter pills: one choice of several, each with a count.
+export function FilterPills<T extends string>({ value, onChange, options, label }: { value: T; onChange: (v: T) => void; options: { value: T; label: string; count?: number }[]; label: string }) {
+  return (
+    <div role="group" aria-label={label} className="flex flex-wrap gap-1.5">
+      {options.map((o) => (
+        <button key={o.value} onClick={() => onChange(o.value)} aria-pressed={value === o.value}
+          className={`rounded-full px-3 py-1 text-xs ring-1 transition ${value === o.value ? "bg-accent/15 text-ink ring-accent" : "text-ink-2 ring-line hover:text-ink"}`}>
+          {o.label}{o.count !== undefined && <span className="ml-1 opacity-80 tabular">{o.count}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Tabs that switch what one card shows.
+export function Segmented<T extends string>({ value, onChange, options, label }: { value: T; onChange: (v: T) => void; options: { value: T; label: ReactNode }[]; label: string }) {
+  return (
+    <div role="tablist" aria-label={label} className="flex gap-1 rounded-lg bg-page p-0.5 ring-1 ring-line">
+      {options.map((o) => (
+        <button key={o.value} role="tab" aria-selected={value === o.value} onClick={() => onChange(o.value)}
+          className={`rounded-md px-3 py-1 text-xs transition ${value === o.value ? "bg-raised text-ink" : "text-ink-2 hover:text-ink"}`}>{o.label}</button>
+      ))}
+    </div>
+  );
+}
+
 // ---------- Notifications ----------
 type Toast = { id: number; kind: "ok" | "error"; text: string };
 const ToastContext = createContext<(kind: Toast["kind"], text: string) => void>(() => {});

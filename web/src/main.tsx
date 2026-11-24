@@ -19,6 +19,7 @@ import { NotFoundPage } from "./pages/NotFound.tsx";
 import { LoginPage } from "./pages/Login.tsx";
 import { AuditPage } from "./pages/Audit.tsx";
 import { ContractsPage, ContractPage } from "./pages/Contracts.tsx";
+import { DebugPage } from "./pages/Debug.tsx";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: true } } });
 
@@ -39,6 +40,7 @@ const router = createBrowserRouter([
       { path: "/contracts/:id", element: <ContractPage /> },
       { path: "/runs", element: <RunsPage /> },
       { path: "/runs/:id", element: <RunPage /> },
+      { path: "/runs/:id/debug", element: <DebugPage /> },
       { path: "/known-bugs", element: <KnownBugsPage /> },
       { path: "/changes", element: <ChangesPage /> },
       { path: "/schedules", element: <SchedulesPage /> },

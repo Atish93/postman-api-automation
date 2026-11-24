@@ -22,6 +22,8 @@ export type RunRow = {
   unattended: number; // 1: nobody can answer approvals (scheduled runs), so they are refused
   data_file_id: number | null;   // plain runs: once per row of this test-data file
   data_file_name: string | null;
+  parent_run_id: number | null;  // fix runs: the run whose failure is being fixed
+  followup_json: string | null;  // fix runs: { collection, request, fix }
   status: string;
 };
 
@@ -50,6 +52,7 @@ export class RunManager {
     this.bus.setMaxListeners(0);
     // Runs that were running when the server last stopped can't be resumed; queued ones still wait their turn.
     db.prepare("UPDATE runs SET status = 'error', message = 'The server stopped before this run finished.', finished_at = ? WHERE status = 'running'").run(now());
+    db.prepare("UPDATE issue_actions SET status = 'failed', message = 'The server stopped before this finished.', finished_at = ? WHERE status = 'running'").run(now());
     this.queue = (db.prepare("SELECT id FROM runs WHERE status = 'queued' ORDER BY id").all() as any[]).map((r) => r.id);
     if (this.queue.length) queueMicrotask(() => this.pump());
   }

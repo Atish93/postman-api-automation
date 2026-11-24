@@ -86,7 +86,8 @@ export const contractOverview = tool(
   async () => {
     const c = need();
     const scope = c.selected?.length ? c.selected : null;
-    const base = { name: c.name, title: c.title, api_version: c.api_version, format: c.format, servers: c.servers, focus_from_the_person: c.focus, endpoints_to_test: scope ?? "all" };
+    const base = { name: c.name, title: c.title, api_version: c.api_version, format: c.format, servers: c.servers, focus_from_the_person: c.focus, endpoints_to_test: scope ?? "all",
+      gaps_marked_intended: (c as any).intended_gaps ?? [] };
     if (c.format === "openapi") {
       const sec = c.spec?.components?.securitySchemes ?? c.spec?.securityDefinitions ?? {};
       const eps = c.endpoints.filter((e) => !scope || scope.includes(e.key));
@@ -200,7 +201,11 @@ export const Plan = z.object({
   auth: z.string().optional(),
   endpoints: z.array(z.string()).optional(),
   endpoints_found: z.array(z.any()).optional(),
-  gaps: z.array(z.string()).optional(),
+  // A gap is a sentence (older plans) or an object naming the endpoints it affects and a suggested fix to the contract.
+  gaps: z.array(z.union([z.string(), z.object({
+    text: z.string().min(1), endpoints: z.array(z.string()).optional(), not_tested: z.string().optional(),
+    contract_now: z.string().optional(), suggestion: z.string().optional(),
+  }).passthrough()])).optional(),
   cases: z.array(Case).min(1),
 }).passthrough();
 export type PlanT = z.infer<typeof Plan>;

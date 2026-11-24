@@ -53,6 +53,8 @@ const ENTRIES: Record<string, Entry> = {
       return { action: yes ? "run.approved" : "run.refused", summary: `${yes ? "Approved" : "Refused"} ${what} (run #${p(req).id})`, details: { run_id: Number(p(req).id), asked } };
     },
   },
+  "POST /api/runs/:id/issue/resend": { after: (req, res) => ({ action: "run.resend", summary: `Re-sent "${b(req).request}" from run #${p(req).id} (${res.error ? `no response: ${res.error}` : res.status})`, details: { run_id: Number(p(req).id), action_id: res.id } }) },
+  "POST /api/runs/:id/issue/debug": { after: (req, res) => ({ action: "run.debug_again", summary: `Asked the debugger to look at "${b(req).request}" from run #${p(req).id} again`, details: { run_id: Number(p(req).id), action_id: res.id } }) },
   "POST /api/runs/:id/cancel": { after: (req) => ({ action: "run.cancel", summary: `Cancelled run #${p(req).id}`, details: { run_id: Number(p(req).id) } }) },
   "POST /api/runs/:id/email": { after: (req, res) => ({ action: "run.email", summary: `Emailed run #${p(req).id}'s report to ${list(res.recipients ?? [])} (${res.status})`, details: { run_id: Number(p(req).id) } }) },
 

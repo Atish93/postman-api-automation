@@ -18,3 +18,15 @@ Found 2026-11-19 in "09 Delete booking".
 Request 08 is correct. It failed because 07 never updated the price (07 got 403 for the missing token), so totalprice was still 150. Probe: after an authenticated PUT set totalprice to 200, PATCH /booking/1645 {"additionalneeds":"Late checkout"} with the Cookie token returned 200 with totalprice 200, firstname Asha and additionalneeds "Late checkout". So the PATCH works as documented.
 Fix: Do not change 08. Adding the Cookie token header to 07 fixes this.
 Found 2026-11-19 in "08 Update booking (partial)".
+
+## Known API bug: GET /user/login returns its session message as raw text labelled Content-Type application/json, which is not valid JSON, although the contract says application/json with schema string.
+Direct probe with real seeded credentials and no unresolved variables: GET /user/login?username=user1&password=XXXXXXXXXXX with Accept: application/json returns 200, Content-Type application/json, body `Logged in user session: 5415229380296914791`. That is raw text, not valid JSON, so JSON parsing fails ("Unexpected token 'L'"). Contract violation: 200 content application/json has schema {type: string}, so the body should be a JSON string literal, e.g. "\"Logged in user session: ...\"". The unresolved {{username}}/{{password}} in the collection is a separate test defect (the username and password environment variables should be set), but it does not cause this failure: the body is identical with valid credentials.
+Found 2026-11-23 in "TC11 Log in with a valid username and password" (Petstore Test).
+
+## Known API bug: GET /user/login never checks credentials: a wrong password or a user that does not exist still gets 200 and a session token, although the contract documents 400 for invalid username/password.
+Direct probe with an existing seeded user: GET /user/login?username=user1&password=wrong-password-xyz returns 200 "Logged in user session: 7831645696840774914". Contract violation: GET /user/login responses say '400: Invalid username/password supplied'. The unresolved {{username}} is a separate test defect: set the username environment variable so the test really sends an existing user. Fixing it would not change the result, because a real user with a wrong password also gets 200.
+Found 2026-11-23 in "TC12 Log in with a wrong password" (Petstore Test).
+
+## Known API bug: GET /user/login on petstore3.swagger.io returns 200 and a session for any username and password, even ones that do not exist or are missing, and never the documented 400 "Invalid username/password supplied".
+Direct probe: GET /user/login?username=nonexistent_user_zz9&password=whatever returned 200 with the body "Logged in user session: 3956666403132616035". GET /user/login with no parameters also returned 200 with a session. Contract violation: GET /user/login documents 400 "Invalid username/password supplied", but the API accepts any credentials, including none. The test's URL, parameters and expected value match the contract.
+Found 2026-11-23 in "KNOWN BUG - TC13 Log in with a username that does not exist" (Petstore Test).

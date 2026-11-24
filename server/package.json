@@ -10,6 +10,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
+    "pretest": "node scripts/check-node.mjs",
     "test": "tsx --test --test-timeout=150000 test/*.test.ts",
     "typecheck": "tsc",
     "seed:demo": "tsx scripts/seed-demo.ts",
