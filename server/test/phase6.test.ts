@@ -3,7 +3,7 @@ process.env.QA_SECRET_KEY = Buffer.alloc(32, 9).toString("base64"); // one key f
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeApi, fakePostman, fixtureCollection, waitForRun } from "./helpers.ts";
@@ -221,7 +221,8 @@ test("backups: made while running, listed, downloadable; automatic ones once a d
   assert.match(name, /^qa-\d{8}-\d{6}-manual\.db$/);
   const list = (await fapp.inject({ method: "GET", url: "/api/backups" })).json();
   assert.equal(list.backups[0].name, name);
-  assert.equal(list.dir, join(dir, "backups"));
+  // realpath: on macOS the temp folder is under /var, a link to /private/var, and the server reports the real path.
+  assert.equal(realpathSync(list.dir), realpathSync(join(dir, "backups")));
   const dl = await fapp.inject({ method: "GET", url: `/api/backups/${name}/download` });
   assert.equal(dl.rawPayload.subarray(0, 15).toString(), "SQLite format 3");
   assert.equal((await fapp.inject({ method: "GET", url: "/api/backups/..%2Fqa.db/download" })).statusCode, 404);

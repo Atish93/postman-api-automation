@@ -209,6 +209,30 @@ const migrations: string[] = [
   `
   ALTER TABLE contracts ADD COLUMN gap_decisions TEXT;   -- JSON: { <gap key>: { intended, at } }, gaps a person marked as intended
   `,
+  `
+  -- Fix runs: a fix a person chose on a failure's debug page, applied to the parent run's collection.
+  ALTER TABLE runs ADD COLUMN parent_run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL;
+  ALTER TABLE runs ADD COLUMN followup_json TEXT;        -- { collection, request, fix }
+
+  -- What people did from a failure's debug page: re-send the request, ask the debugger again,
+  -- mark it as a known bug, or apply a fix (which starts a fix run: child_run_id).
+  CREATE TABLE issue_actions (
+    id           INTEGER PRIMARY KEY,
+    run_id       INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    collection   INTEGER NOT NULL DEFAULT 0,           -- which collection of the run (regression runs can have several)
+    request      TEXT NOT NULL,                        -- the failing request's name when the action started
+    kind         TEXT NOT NULL CHECK (kind IN ('resend', 'debug', 'known_bug', 'fix')),
+    status       TEXT NOT NULL CHECK (status IN ('running', 'done', 'failed')),
+    input_json   TEXT,
+    output_json  TEXT,
+    message      TEXT,                                 -- why it failed, in words
+    cost_usd     REAL,
+    child_run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+    created_at   TEXT NOT NULL,
+    finished_at  TEXT
+  );
+  CREATE INDEX issue_actions_by_run ON issue_actions (run_id, collection);
+  `,
 ];
 
 export function openDb(path = process.env.QA_DB ?? fileURLToPath(new URL("../data/qa.db", import.meta.url))): DB {

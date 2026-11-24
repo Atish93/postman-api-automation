@@ -1,0 +1,25 @@
+{
+  "environments": {
+    "test": { "label": "Test", "baseUrl": "https://restful-booker.herokuapp.com", "healthPath": "/ping" },
+    "stg": { "label": "Stg", "baseUrl": "", "healthPath": "/ping" },
+    "prod": { "label": "Prod", "baseUrl": "", "healthPath": "/ping" }
+  },
+  "defaultEnvironment": "test",
+  "serverErrors": {
+    "terminateAtPercent": 80,
+    "minRequests": 3,
+    "recheckAfterSeconds": 15
+  },
+  "circuitBreaker": {
+    "minFailingRequests": 10,
+    "failingRequestPercent": 15
+  },
+  "limits": {
+    "healsPerRun": 10,
+    "newKnownBugsPerRun": 10,
+    "attemptsPerRequest": 3
+  },
+  "models": {
+    "default": "claude-opus-5-5"
+  }
+}

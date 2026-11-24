@@ -4,9 +4,10 @@ import { z } from "zod";
 import { now, type DB } from "../db.ts";
 import { HttpError } from "../errors.ts";
 import { FINISHED, type RunManager } from "../runs/manager.ts";
-import { issueDetail, lightResult } from "../debug.ts";
+import { debugOverlay, issueDetail, lightResult, type Overlay } from "../debug.ts";
+import { markKnownBug, resend, startDebug, startFix } from "../runs/followup.ts";
 
-const view = (r: any, withResult = false) => ({
+const view = (r: any, withResult = false, overlay?: Overlay) => ({
   id: r.id, kind: r.kind, ai_mode: r.ai_mode ?? null, request: r.request ?? null, status: r.status, message: r.message,
   schedule_id: r.schedule_id ?? null, unattended: !!r.unattended,
   data_file: r.data_file_name ? { id: r.data_file_id ?? null, name: r.data_file_name } : null,
@@ -18,7 +19,10 @@ const view = (r: any, withResult = false) => ({
   created_at: r.created_at, started_at: r.started_at, finished_at: r.finished_at,
   duration_ms: r.started_at && r.finished_at ? Date.parse(r.finished_at) - Date.parse(r.started_at) : null,
   // The heavy per-failure debug bundles stay on the server; the run page gets one summary line per failure.
-  ...(withResult && { result: r.result_json ? lightResult(JSON.parse(r.result_json)) : null }),
+  // A fix run: the failure it fixes, in the run it came from.
+  parent_run_id: r.parent_run_id ?? null,
+  followup: r.followup_json ? (({ collection, request, fix }) => ({ collection, request, fix: { title: fix?.title, kind: fix?.kind } }))(JSON.parse(r.followup_json)) : null,
+  ...(withResult && { result: r.result_json ? lightResult(JSON.parse(r.result_json), overlay) : null }),
 });
 
 // A data file can drive a plain run of its own collection.
@@ -114,7 +118,10 @@ export function runsRoutes(app: FastifyInstance, db: DB, runs: RunManager) {
     return rows.map((r) => view(r));
   });
 
-  app.get<{ Params: { id: string } }>("/api/runs/:id", async (req) => view(getRow(Number(req.params.id)), true));
+  app.get<{ Params: { id: string } }>("/api/runs/:id", async (req) => {
+    const r = getRow(Number(req.params.id));
+    return view(r, true, debugOverlay(db, r.id));
+  });
 
   // Every event of a run so far (after=<seq> for only newer ones).
   app.get<{ Params: { id: string }; Querystring: { after?: string } }>("/api/runs/:id/events/history", async (req) => {
@@ -201,6 +208,28 @@ export function runsRoutes(app: FastifyInstance, db: DB, runs: RunManager) {
     const name = `run-${d.run.id}-${(d.issue.case_id ?? d.issue.request).replace(/[^\w.-]+/g, "_").slice(0, 60)}-debug.json`;
     reply.header("content-type", "application/json").header("content-disposition", `attachment; filename="${name}"`);
     return JSON.stringify(d, null, 2);
+  });
+
+  // ---- Actions on one failure, from its debug page ----
+  const Ref = z.object({ request: z.string().min(1), collection: z.number().int().min(0).default(0) });
+  // Send the request again exactly as the run did (secrets from the environment).
+  app.post<{ Params: { id: string } }>("/api/runs/:id/issue/resend", async (req) => resend(db, Number(req.params.id), Ref.parse(req.body)));
+  // Ask the debugger to look again, optionally with a question. Runs in the background; the debug page follows it.
+  app.post<{ Params: { id: string } }>("/api/runs/:id/issue/debug", async (req, reply) => {
+    const b = Ref.extend({ note: z.string().trim().max(2000).optional() }).parse(req.body);
+    reply.code(202);
+    return startDebug(db, runs, Number(req.params.id), b, b.note || null);
+  });
+  // Rename the request "KNOWN BUG - …" in its collection, with the evidence.
+  app.post<{ Params: { id: string } }>("/api/runs/:id/issue/known-bug", async (req) => {
+    const b = Ref.extend({ evidence: z.string().trim().min(5, "Say in a few words why it's an API bug.").max(2000) }).parse(req.body);
+    return markKnownBug(db, Number(req.params.id), b, b.evidence, req.ip);
+  });
+  // Apply one of the debugger's test changes, then re-run the collection: a new run.
+  app.post<{ Params: { id: string } }>("/api/runs/:id/issue/fix", async (req, reply) => {
+    const b = Ref.extend({ fix: z.number().int().min(0) }).parse(req.body);
+    reply.code(202);
+    return startFix(db, runs, Number(req.params.id), b, b.fix, req.ip);
   });
 
   app.post<{ Params: { id: string } }>("/api/runs/:id/cancel", async (req) => {
