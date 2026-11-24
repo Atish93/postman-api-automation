@@ -219,7 +219,7 @@ export function RunPage() {
   const executions = result && "executions" in result ? result.executions : null;
   const live = events.filter((e) => e.type === "request_done").map((e) => ({ ...e.data, request: e.data.request as string }));
   const ai = aiResultOf(r);
-  const issues = ai?.issues ?? [];
+  const issues = ai?.issues ?? (r.result && "executions" in r.result ? r.result.issues ?? [] : []);
 
   return (
     <>
@@ -229,6 +229,7 @@ export function RunPage() {
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-semibold">Run #{r.id}</h1>
             <StatusBadge status={r.status} /><KindBadge kind={r.kind} mode={r.ai_mode} />
+            {r.parent_run_id && <span className="inline-flex items-center gap-1 rounded-md border border-line px-1.5 py-0.5 text-xs text-ink-2"><Icon name="play" size={11} />Fix</span>}
           </div>
           <p className="mt-1 text-sm text-ink-2">
             {r.collection.id ? <Link to={`/collections/${r.collection.id}`} className="hover:text-accent">{r.collection.name}</Link> : r.collection.name}
@@ -247,7 +248,14 @@ export function RunPage() {
       </div>
 
       <div className="space-y-4">
-        {r.ai_mode === "build" && r.request && (
+        {r.parent_run_id && r.followup && (
+          <div className="flex items-start gap-2 rounded-xl border border-line bg-card px-4 py-3 text-sm">
+            <Icon name="play" className="mt-0.5 shrink-0 text-accent" />
+            <span>This run applies a fix chosen on the debug page of <Link to={`/runs/${r.parent_run_id}`} className="text-accent hover:underline">Run #{r.parent_run_id}</Link>:{" "}
+              <strong>{r.followup.fix.title}</strong> <span className="text-ink-2">(for {r.followup.request.replace(/^KNOWN BUG - /, "")}). The change is kept only if that request passes and nothing else starts failing.</span></span>
+          </div>
+        )}
+        {r.ai_mode === "build" && r.request && !r.parent_run_id && (
           <div className="rounded-xl border border-line bg-card px-4 py-3">
             <div className="text-xs font-medium text-muted">What to test</div>
             <p className="mt-1 text-sm">{r.request}</p>
@@ -264,6 +272,7 @@ export function RunPage() {
         <StatTiles run={r} issues={issues} />
         <EmailsSent runId={r.id} going={going} />
 
+        {r.kind === "plain" && !going && issues.length > 0 && <AgentReportCard run={r} issues={issues} multi={null} plain />}
         {r.kind === "plain" ? (
           <Card title={going ? <span className="flex items-center gap-2">Requests <Spinner size={12} /></span> : "Requests"}>
             {(executions ?? live).length === 0 ? <p className="px-4 py-6 text-sm text-ink-2">{going ? "Waiting for the first request…" : "No requests ran."}</p> : (

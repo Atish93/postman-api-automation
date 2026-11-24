@@ -88,7 +88,7 @@ export function StatTiles({ run, issues }: { run: Run; issues: IssueSummary[] })
     </div>
   );
   return (
-    <section aria-label="Run numbers" className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
+    <section aria-label="Run numbers" className={`grid grid-cols-2 gap-3 md:grid-cols-3 ${run.kind === "ai" ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
       {tile("Checks passed", <>{total - failed} <span className="text-base font-normal text-ink-2">/ {total}</span></>,
         <div className="mt-2 flex h-1.5 overflow-hidden rounded-full" style={{ background: "color-mix(in srgb, var(--status-critical) 30%, var(--line))" }}>
           <div style={{ width: `${total ? ((total - failed) / total) * 100 : 0}%`, background: "var(--status-good)" }} />
@@ -96,7 +96,7 @@ export function StatTiles({ run, issues }: { run: Run; issues: IssueSummary[] })
       {tile("Failed checks", <span className={failed ? "text-bad-ink" : ""}>{failed}</span>, breakdown && <div className="mt-0.5 text-xs text-ink-2">{breakdown}</div>)}
       {tile(cases ? "Requests · Test cases" : "Requests", <>{run.requests ?? "–"}{cases ? <span className="text-base font-normal text-ink-2"> · {cases}</span> : null}</>)}
       {tile("Duration", run.duration_ms != null ? duration(run.duration_ms) : "–")}
-      {tile("AI cost", run.cost_usd != null ? money(run.cost_usd) : "–")}
+      {run.kind === "ai" && tile("AI cost", run.cost_usd != null ? money(run.cost_usd) : "–")}
     </section>
   );
 }
@@ -106,14 +106,15 @@ const FILTERS: { value: "all" | IssueCategory; label: string }[] = [
   { value: "all", label: "All" }, { value: "unexplained", label: "Unexplained" }, { value: "api_bug", label: "API bugs" },
   { value: "known_bug", label: "Known bugs" }, { value: "test_defect", label: "Test mistakes" }, { value: "flaky", label: "Flaky" }, { value: "fixed", label: "Fixed" },
 ];
-export function AgentReportCard({ run, issues, multi, onOpenReport, className }: { run: Run; issues: IssueSummary[]; multi: string[] | null; onOpenReport: () => void; className?: string }) {
+export function AgentReportCard({ run, issues, multi, onOpenReport, className, plain }: { run: Run; issues: IssueSummary[]; multi: string[] | null; onOpenReport?: () => void; className?: string; plain?: boolean }) {
   const [filter, setFilter] = useState<"all" | IssueCategory>("all");
   const options = FILTERS.map((f) => ({ ...f, count: f.value === "all" ? issues.length : issues.filter((i) => i.category === f.value).length }))
     .filter((f) => f.value === "all" || f.count > 0);
   const shown = issues.filter((i) => filter === "all" || i.category === filter);
   return (
-    <SectionCard className={className} icon="bug" iconColor="var(--status-critical)" title="Agent report" note="why checks failed"
-      actions={<Button size="sm" variant="ghost" icon="columns" onClick={onOpenReport}>Full report</Button>}>
+    <SectionCard className={className} icon="bug" iconColor="var(--status-critical)" title={plain ? "Failures" : "Agent report"}
+      note={plain ? "not diagnosed: open one to debug it, or ask the debugger" : "why checks failed"}
+      actions={onOpenReport && <Button size="sm" variant="ghost" icon="columns" onClick={onOpenReport}>Full report</Button>}>
       {issues.length === 0 ? <p className="px-4 py-6 text-sm text-ink-2">No failures to explain{run.status === "passed" ? ": every check passed." : "."}</p> : (<>
         {options.length > 2 && <div className="px-4 pt-3"><FilterPills label="Filter failures" value={filter} onChange={setFilter} options={options} /></div>}
         <ul className="max-h-[32rem] flex-1 divide-y divide-line overflow-y-auto py-1">

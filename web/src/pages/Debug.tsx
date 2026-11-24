@@ -2,26 +2,37 @@
 // the request and response as run, what the debugger tried, what the contract and knowledge base say,
 // and the log lines about it. Opened from the run page's Debug buttons.
 import { useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Link, useParams, useSearchParams } from "react-router";
-import { api, type Cause, type Fix, type Header, type IssueDetail } from "../api.ts";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
+import { api, type Cause, type Fix, type Header, type IssueAction, type IssueDetail } from "../api.ts";
 import { EVENT_LOOK } from "../events.tsx";
 import { dateTime, duration } from "../format.ts";
 import { ActivityRow, CategoryChip, DiffBlock, HealerChange, METHOD_COLOR, issueHref } from "../RunParts.tsx";
-import { Button, ErrorNote, Icon, Segmented, Spinner, useToast } from "../ui.tsx";
+import { Button, ErrorNote, Field, Icon, Modal, Segmented, Spinner, inputClass, useToast } from "../ui.tsx";
+import { money } from "../format.ts";
+
+type Ref = { collection: number; request: string };
 
 export function DebugPage() {
   const id = Number(useParams().id);
   const [params] = useSearchParams();
   const ref = { collection: Number(params.get("collection") ?? 0), request: params.get("request") ?? "" };
-  const q = useQuery({ queryKey: ["run-issue", id, ref.collection, ref.request], queryFn: () => api.runIssue(id, ref), enabled: !!ref.request });
+  // While the debugger is looking again, keep the page fresh: its findings appear when it's done.
+  const q = useQuery({ queryKey: ["run-issue", id, ref.collection, ref.request], queryFn: () => api.runIssue(id, ref), enabled: !!ref.request,
+    refetchInterval: (query) => (query.state.data?.actions.some((a) => a.status === "running") ? 2000 : false) });
   if (!ref.request) return <ErrorNote error={new Error("No failure chosen. Open one from the run page.")} />;
   if (q.isPending) return <div className="flex justify-center py-20 text-muted"><Spinner size={24} /></div>;
   if (q.error) return <><Back id={id} /><ErrorNote error={q.error} /></>;
   return <DebugView d={q.data} collection={ref.collection} />;
 }
 
-const Back = ({ id }: { id: number }) => <div className="mb-2 text-sm"><Link to={`/runs/${id}`} className="text-ink-2 hover:text-ink">← Run #{id}</Link></div>;
+function Back({ id, className = "mb-3" }: { id: number; className?: string }) {
+  return (
+    <Link to={`/runs/${id}`} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-ink ring-1 ring-line hover:bg-raised ${className}`}>
+      <Icon name="chevron" size={14} className="rotate-180" />Back to Run #{id}
+    </Link>
+  );
+}
 
 function Panel({ icon, iconColor, title, note, actions, children, className = "", tone }: { icon: string; iconColor?: string; title: ReactNode; note?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; tone?: string }) {
   return (
@@ -63,11 +74,14 @@ function DebugView({ d, collection }: { d: IssueDetail; collection: number }) {
 
   return (
     <>
-      <nav aria-label="Breadcrumb" className="mb-2 flex flex-wrap items-center gap-1.5 text-sm text-muted">
-        <Link to="/runs" className="text-ink-2 hover:text-ink">Runs</Link><span aria-hidden="true">/</span>
-        <Link to={`/runs/${run.id}`} className="text-ink-2 hover:text-ink">Run #{run.id}</Link><span aria-hidden="true">/</span>
-        <span className="text-ink">Debug {issue.case_id ?? "failure"}</span>
-      </nav>
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <Back id={run.id} className="" />
+        <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-1.5 text-sm text-muted">
+          <Link to="/runs" className="text-ink-2 hover:text-ink">Runs</Link><span aria-hidden="true">/</span>
+          <Link to={`/runs/${run.id}`} className="text-ink-2 hover:text-ink">Run #{run.id}</Link><span aria-hidden="true">/</span>
+          <span className="text-ink">Debug {issue.case_id ?? "failure"}</span>
+        </nav>
+      </div>
 
       {/* Header */}
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
@@ -93,7 +107,10 @@ function DebugView({ d, collection }: { d: IssueDetail; collection: number }) {
         </div>
       </div>
 
+      <ActionBar d={d} refOf={{ collection, request: issue.request }} />
+
       <div className="space-y-4">
+        {d.actions.length > 0 && <ActionsPanel d={d} />}
         {/* What failed */}
         <section aria-label="What failed" className="grid overflow-hidden rounded-xl border sm:grid-cols-2 lg:grid-cols-4"
           style={{ borderColor: "color-mix(in srgb, var(--bad-ink) 40%, transparent)", background: "color-mix(in srgb, var(--bad-ink) 6%, var(--card))" }}>
@@ -119,7 +136,7 @@ function DebugView({ d, collection }: { d: IssueDetail; collection: number }) {
         {/* Likely cause + probable fix */}
         <div className="grid items-start gap-4 lg:grid-cols-2">
           <CausesPanel d={d} />
-          <FixPanel d={d} copy={copy} />
+          <FixPanel d={d} copy={copy} refOf={{ collection, request: issue.request }} />
         </div>
 
         {/* Request and response */}
@@ -164,13 +181,18 @@ function causesOf(d: IssueDetail): Cause[] {
   const seen = new Set<string>();
   return all.filter((c) => !seen.has(c.title) && seen.add(c.title)).slice(0, 3);
 }
-function fixesOf(d: IssueDetail): Fix[] {
+// A hint from an older diagnosis: shown, but not one the server can apply.
+type LegacyFix = Fix & { legacy?: boolean };
+// Recommended first; the order (and so the index) is the same one the server uses to apply a fix.
+function fixesOf(d: IssueDetail): LegacyFix[] {
   const fixes = d.issue.diagnoses.flatMap((x) => x.fixes ?? []);
-  if (fixes.length) return [...fixes].sort((a, b) => Number(!!b.recommended) - Number(!!a.recommended)).slice(0, 3);
+  if (fixes.length) return [...fixes].sort((a, b) => Number(!!b.recommended) - Number(!!a.recommended));
   // Older diagnoses: their hint is the fix.
-  return d.issue.diagnoses.filter((x) => x.fix_hint).map((x) => ({ kind: x.category === "api_bug" ? "report_api_bug" : "change_test", title: "Suggested by the debugger", detail: x.fix_hint! }));
+  return d.issue.diagnoses.filter((x) => x.fix_hint).map((x): LegacyFix => ({ kind: x.category === "api_bug" ? "report_api_bug" : "change_test", title: "Suggested by the debugger", detail: x.fix_hint!, legacy: true }));
 }
 function notDiagnosed(d: IssueDetail) {
+  const marked = d.actions.find((a) => a.kind === "known_bug");
+  if (marked) return `You marked this as a known bug (${new Date(marked.created_at).toLocaleString()}): ${marked.input?.evidence ?? ""}`;
   if (d.issue.category === "known_bug") return "This is a known bug failing the same way as before, so the agents didn't investigate it again. Its evidence is in the request's description in Postman.";
   return d.run.status === "circuit_breaker"
     ? "The run stopped (circuit breaker) before the debugger recorded a finding for this failure. What it tried so far is below."
@@ -217,10 +239,12 @@ function CausesPanel({ d }: { d: IssueDetail }) {
 }
 
 const FIX_KIND: Record<Fix["kind"], string> = { report_api_bug: "Report as API bug", change_test: "Change the test", fix_environment: "Fix the environment", clarify_contract: "Clarify the contract" };
-function FixPanel({ d, copy }: { d: IssueDetail; copy: (text: string, what: string) => void }) {
+function FixPanel({ d, copy, refOf }: { d: IssueDetail; copy: (text: string, what: string) => void; refOf: Ref }) {
   const fixes = fixesOf(d);
   const [pick, setPick] = useState(0);
-  const f = fixes[Math.min(pick, fixes.length - 1)];
+  const [applying, setApplying] = useState(false);
+  const at = Math.min(pick, fixes.length - 1);
+  const f = fixes[at];
   return (
     <Panel icon="gear" iconColor="var(--accent)" title={d.issue.category === "fixed" ? "What fixed it" : "Probable fix"} tone="var(--accent)">
       {d.issue.changes.length > 0 && (
@@ -252,11 +276,15 @@ function FixPanel({ d, copy }: { d: IssueDetail; copy: (text: string, what: stri
           {f.change && <DiffBlock lines={f.change.split("\n")} />}
           <div className="flex flex-wrap gap-2">
             {f.kind === "report_api_bug" && <Button icon="copy" onClick={() => copy(bugReport(d, f), "Bug report")}>Copy bug report</Button>}
+            {f.kind === "change_test" && !(f as LegacyFix).legacy && (
+              <Button variant="primary" icon="play" disabled={!!d.can.fix} title={d.can.fix ?? undefined} onClick={() => setApplying(true)}>Apply and re-run</Button>
+            )}
             {f.change && <Button icon="copy" onClick={() => copy(f.change!, "Change")}>Copy change</Button>}
             {f.kind !== "report_api_bug" && !f.change && <Button icon="copy" onClick={() => copy(f.detail, "Fix")}>Copy</Button>}
           </div>
         </div>
       )}
+      {applying && f && <ApplyDialog d={d} fix={f} index={at} refOf={refOf} onClose={() => setApplying(false)} />}
       <p className="border-t border-line px-4 py-2 text-xs text-muted">Suggestions come from the debugger's probes{d.contract ? ", the contract" : ""} and the knowledge base. Nothing changes until someone acts on them.</p>
     </Panel>
   );
@@ -375,3 +403,163 @@ function LogsPanel({ d }: { d: IssueDetail }) {
   );
 }
 
+
+// ---- Acting on the failure ----
+function useRefresh() {
+  const qc = useQueryClient();
+  return (runId: number) => {
+    qc.invalidateQueries({ queryKey: ["run-issue", runId] });
+    qc.invalidateQueries({ queryKey: ["runs", runId] });
+  };
+}
+
+function ActionBar({ d, refOf }: { d: IssueDetail; refOf: Ref }) {
+  const toast = useToast();
+  const refresh = useRefresh();
+  const [asking, setAsking] = useState(false);
+  const [marking, setMarking] = useState(false);
+  const resend = useMutation({
+    mutationFn: () => api.resendIssue(d.run.id, refOf),
+    onSuccess: (r) => { refresh(d.run.id); toast("ok", r.error ? `No response: ${r.error}` : `Answered ${r.status}${r.same_as_run ? ", as in the run" : ", not as in the run"}`); },
+    onError: (e) => toast("error", e.message),
+  });
+  const debugging = d.actions.some((a) => a.kind === "debug" && a.status === "running");
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2" role="group" aria-label="Actions">
+      <Button icon="refresh" busy={resend.isPending} disabled={!!d.can.resend} title={d.can.resend ?? "Send the same request again to " + d.run.environment_label} onClick={() => resend.mutate()}>Re-send request</Button>
+      <Button icon="sparkle" busy={debugging} disabled={!!d.can.debug || debugging} title={d.can.debug ?? (debugging ? "The debugger is looking at it now" : "The debugger investigates this failure again")} onClick={() => setAsking(true)}>
+        {debugging ? "The debugger is looking…" : "Ask the debugger again"}
+      </Button>
+      <Button icon="bug" disabled={!!d.can.known_bug} title={d.can.known_bug ?? "Rename it KNOWN BUG, with the evidence"} onClick={() => setMarking(true)}>Mark as known bug</Button>
+      {asking && <AskDialog d={d} refOf={refOf} onClose={() => setAsking(false)} />}
+      {marking && <KnownBugDialog d={d} refOf={refOf} onClose={() => setMarking(false)} />}
+    </div>
+  );
+}
+
+function AskDialog({ d, refOf, onClose }: { d: IssueDetail; refOf: Ref; onClose: () => void }) {
+  const toast = useToast();
+  const refresh = useRefresh();
+  const [note, setNote] = useState("");
+  const ask = useMutation({
+    mutationFn: () => api.debugIssue(d.run.id, refOf, note.trim() || undefined),
+    onSuccess: () => { refresh(d.run.id); toast("ok", "The debugger is on it. Its findings appear here when it's done."); onClose(); },
+    onError: (e) => toast("error", e.message),
+  });
+  return (
+    <Modal open onClose={onClose} title="Ask the debugger again"
+      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" icon="sparkle" busy={ask.isPending} onClick={() => ask.mutate()}>Ask</Button></>}>
+      <div className="space-y-3 text-sm">
+        <p className="text-ink-2">It reads the request, sends probes to {d.run.environment_label} and records likely causes and fixes. It changes nothing. It uses AI, usually a few cents.</p>
+        <Field label="What should it look at? (optional)" hint="For example: is it the token? Does it happen with other ids?">
+          <textarea className={inputClass} rows={3} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} />
+        </Field>
+      </div>
+    </Modal>
+  );
+}
+
+function KnownBugDialog({ d, refOf, onClose }: { d: IssueDetail; refOf: Ref; onClose: () => void }) {
+  const toast = useToast();
+  const refresh = useRefresh();
+  const navigate = useNavigate();
+  const suggested = d.issue.diagnoses.find((x) => x.category === "api_bug")?.evidence ?? d.issue.diagnoses[0]?.evidence ?? "";
+  const [evidence, setEvidence] = useState(suggested);
+  const mark = useMutation({
+    mutationFn: () => api.markKnownBug(d.run.id, refOf, evidence.trim()),
+    onSuccess: (r) => {
+      refresh(d.run.id);
+      toast("ok", `Marked as a known bug in ${r.where}`);
+      onClose();
+      navigate(issueHref(d.run.id, { collection: refOf.collection, request: r.request }), { replace: true });
+    },
+    onError: (e) => toast("error", e.message),
+  });
+  return (
+    <Modal open onClose={onClose} title="Mark as a known bug" wide
+      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" icon="bug" busy={mark.isPending} disabled={evidence.trim().length < 5} onClick={() => mark.mutate()}>Mark as known bug</Button></>}>
+      <div className="space-y-3 text-sm">
+        <p>The request is renamed <code className="rounded bg-raised px-1 font-mono text-xs ring-1 ring-line">KNOWN BUG - {d.issue.request.replace(/^KNOWN BUG - /, "")}</code> in its collection,
+          {d.run.plain || d.run.ai_mode !== "contract" ? " (in Postman, for a collection from Postman)" : " the one you add to Postman,"} with this evidence in its description.
+          Later runs treat the same failure as a known bug instead of investigating it again.</p>
+        {!d.issue.diagnoses.some((x) => x.category === "api_bug") && (
+          <p className="flex gap-2 text-warn-ink"><Icon name="alert" className="mt-0.5 shrink-0" />The debugger hasn't shown this is an API bug. Only mark it if you're sure the API is wrong, not the test.</p>
+        )}
+        <Field label="Why it's an API bug">
+          <textarea className={inputClass} rows={4} maxLength={2000} value={evidence} onChange={(e) => setEvidence(e.target.value)} placeholder="What the API does, and what the documentation says it should do" />
+        </Field>
+      </div>
+    </Modal>
+  );
+}
+
+function ApplyDialog({ d, fix, index, refOf, onClose }: { d: IssueDetail; fix: Fix; index: number; refOf: Ref; onClose: () => void }) {
+  const toast = useToast();
+  const refresh = useRefresh();
+  const navigate = useNavigate();
+  const apply = useMutation({
+    mutationFn: () => api.applyFix(d.run.id, refOf, index),
+    onSuccess: (r) => { refresh(d.run.id); toast("ok", `Started run #${r.run_id}`); navigate(`/runs/${r.run_id}`); },
+    onError: (e) => toast("error", e.message),
+  });
+  return (
+    <Modal open onClose={onClose} title="Apply this fix and re-run" wide
+      footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" icon="play" busy={apply.isPending} onClick={() => apply.mutate()}>Apply and re-run</Button></>}>
+      <div className="space-y-3 text-sm">
+        <div className="font-semibold">{fix.title}</div>
+        <p className="whitespace-pre-line text-ink-2">{fix.detail}</p>
+        {fix.change && <DiffBlock lines={fix.change.split("\n")} />}
+        <ul className="list-disc space-y-1 pl-5 text-ink-2">
+          <li>This starts a new run. The self-healer makes this change to the collection as Run #{d.run.id} ended, then the whole collection runs again on {d.run.environment_label}.</li>
+          <li>The change is kept only if this request passes and nothing else starts failing; otherwise it's undone.</li>
+          <li>{d.run.ai_mode === "contract" ? "Nothing goes to Postman: if the new run passes, you add it from its page." : "A collection from Postman is saved back only if every remaining failure is a known bug, as in any AI run."}</li>
+          <li>It uses AI.</li>
+        </ul>
+      </div>
+    </Modal>
+  );
+}
+
+// What people did here, newest first.
+function ActionsPanel({ d }: { d: IssueDetail }) {
+  return (
+    <Panel icon="clock" title="What you did here" note={`${d.actions.length}`}>
+      <ul className="divide-y divide-line">{d.actions.map((a) => <ActionRow key={a.id} a={a} />)}</ul>
+    </Panel>
+  );
+}
+function ActionRow({ a }: { a: IssueAction }) {
+  const [open, setOpen] = useState(false);
+  const time = <span className="tabular shrink-0 text-xs text-muted">{new Date(a.created_at).toLocaleTimeString()}</span>;
+  const o = a.output ?? {};
+  let icon = "refresh", text: ReactNode = null, more: ReactNode = null;
+  if (a.kind === "resend") {
+    text = o.error ? <>Re-sent the request: <span className="text-bad-ink">no response ({o.error})</span></>
+      : <>Re-sent the request: <span className="font-mono font-semibold" style={{ color: statusColor(o.status) }}>{o.status}</span> in {duration(o.response_time_ms)} · {o.same_as_run ? "same as in the run" : <span className="text-warn-ink">different from the run</span>}</>;
+    more = !o.error && <div className="space-y-2"><Label>Response</Label><Code className="max-h-64">{o.body || "(empty body)"}</Code></div>;
+  } else if (a.kind === "debug") {
+    icon = "sparkle";
+    text = a.status === "running" ? <span className="flex items-center gap-2"><Spinner size={12} />The debugger is looking at it again{a.input?.note ? `: "${a.input.note}"` : ""}…</span>
+      : a.status === "failed" ? <>The debugger couldn't finish: <span className="text-bad-ink">{a.message}</span></>
+      : <>The debugger looked again{a.input?.note ? ` ("${a.input.note}")` : ""}. Its findings are below.{a.cost_usd != null && <span className="text-xs text-muted"> · {money(a.cost_usd)}</span>}</>;
+    more = o.report && <p className="whitespace-pre-line text-sm text-ink-2">{o.report}</p>;
+  } else if (a.kind === "known_bug") {
+    icon = "bug";
+    text = <>Marked as a known bug in {o.where}{o.status_before !== o.status_after && <> · the run is now <strong>{String(o.status_after).replace(/_/g, " ")}</strong></>}</>;
+    more = <p className="text-sm text-ink-2">Evidence: {a.input?.evidence}</p>;
+  } else if (a.kind === "fix") {
+    icon = "play";
+    text = <>Applied “{a.input?.fix?.title}” and started {a.child_run_id ? <Link to={`/runs/${a.child_run_id}`} className="text-accent hover:underline">Run #{a.child_run_id}</Link> : "a run"}</>;
+  }
+  return (
+    <li className="px-4 py-2.5 text-sm">
+      <div className="flex items-start gap-3">
+        <Icon name={icon} size={14} className={`mt-0.5 shrink-0 ${a.status === "failed" ? "text-critical" : "text-muted"}`} />
+        <div className="min-w-0 flex-1">{text}</div>
+        {more && <button className="shrink-0 text-xs text-accent hover:underline" aria-expanded={open} onClick={() => setOpen((v) => !v)}>{open ? "Hide" : "Details"}</button>}
+        {time}
+      </div>
+      {open && more && <div className="mt-2 pl-7">{more}</div>}
+    </li>
+  );
+}

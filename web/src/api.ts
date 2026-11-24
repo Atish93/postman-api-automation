@@ -86,7 +86,7 @@ export type Probe = {
 export type ContractGap = { key: string; text: string; endpoints: string[]; not_tested: string | null; contract_now: string | null; suggestion: string | null; intended?: boolean };
 // One failure's debug view.
 export type IssueDetail = {
-  run: { id: number; status: RunStatus; collection_name: string; environment_label: string; contract_id: number | null; created_at: string };
+  run: { id: number; kind: "plain" | "ai"; ai_mode: string | null; status: RunStatus; collection_name: string; environment_label: string; contract_id: number | null; created_at: string; plain: boolean };
   issue: {
     request: string; case_id: string | null; state: "failing" | "passing_now"; category: IssueCategory; confidence: string | null;
     exchange: Exchange | null; failed_assertions: { assertion: string; error: string }[]; test_script: string; prerequest_script: string;
@@ -98,7 +98,16 @@ export type IssueDetail = {
   contract: { contract_id: number; key: string; method: string; path: string; summary: string | null; responses: string[]; secured: boolean; excerpt: string | null } | null;
   gaps: ContractGap[];
   knowledge: { title: string; text: string }[];
+  actions: IssueAction[];
+  // Why each action can't be used here (null: it can).
+  can: { resend: string | null; debug: string | null; known_bug: string | null; fix: string | null };
 };
+// Something a person did from the debug page.
+export type IssueAction = {
+  id: number; kind: "resend" | "debug" | "known_bug" | "fix"; status: "running" | "done" | "failed"; message: string | null; cost_usd: number | null;
+  child_run_id: number | null; created_at: string; finished_at: string | null; input: any; output: any;
+};
+export type ResendResult = { id: number; status?: number; error?: string; response_time_ms: number; response_size?: number; response_headers?: Header[]; body?: string; same_as_run: boolean };
 export type IssueRef = { collection: number; request: string; case_id: string | null };
 export type ContractCase = { id: string; endpoint?: string; type: string; title: string; request?: string; expected: string; contract_ref?: string };
 export type ContractPlan = {
@@ -139,8 +148,10 @@ export type Run = {
   requests: number | null; assertions: number | null; failed_assertions: number | null;
   cost_usd: number | null; exit_code: number | null;
   created_at: string; started_at: string | null; finished_at: string | null; duration_ms: number | null;
+  parent_run_id?: number | null; // a fix run: the run whose failure it fixes
+  followup?: { collection: number; request: string; fix: { title: string; kind: string } } | null;
   result?:
-    | { environment: { label: string; base_url: string }; executions: Execution[] }
+    | { environment: { label: string; base_url: string }; executions: Execution[]; issues?: IssueSummary[] }
     | { environment: { label: string; base_url: string }; collections: AiCollectionResult[]; report: string; cost_usd: number; server_issue: string | null;
         issues?: IssueSummary[];
         contract?: { name: string; plan: ContractPlan | null; review_rounds: number; collection: any } }
@@ -257,6 +268,11 @@ export const api = {
   cancelRun: (id: number) => request<{ ok: true }>("POST", `/runs/${id}/cancel`),
   runIssue: (id: number, ref: { collection: number; request: string }) =>
     request<IssueDetail>("GET", `/runs/${id}/issue?collection=${ref.collection}&request=${encodeURIComponent(ref.request)}`),
+  resendIssue: (id: number, ref: { collection: number; request: string }) => request<ResendResult>("POST", `/runs/${id}/issue/resend`, ref),
+  debugIssue: (id: number, ref: { collection: number; request: string }, note?: string) => request<{ id: number; status: string }>("POST", `/runs/${id}/issue/debug`, { ...ref, note }),
+  markKnownBug: (id: number, ref: { collection: number; request: string }, evidence: string) =>
+    request<{ id: number; request: string; where: string; status: RunStatus }>("POST", `/runs/${id}/issue/known-bug`, { ...ref, evidence }),
+  applyFix: (id: number, ref: { collection: number; request: string }, fix: number) => request<{ id: number; run_id: number }>("POST", `/runs/${id}/issue/fix`, { ...ref, fix }),
   runIssueBundleUrl: (id: number, ref: { collection: number; request: string }) =>
     `/api/runs/${id}/issue/bundle?collection=${ref.collection}&request=${encodeURIComponent(ref.request)}`,
 

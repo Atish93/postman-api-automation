@@ -26,6 +26,8 @@ export const EVENT_LOOK: Record<string, { icon: string; color?: string }> = {
   email_failed: { icon: "alert", color: "var(--status-critical)" },
   updated: { icon: "upload", color: "var(--status-good)" },
   cases_approved: { icon: "check", color: "var(--status-good)" },
+  followup_started: { icon: "sparkle", color: "var(--accent)" },
+  followup_finished: { icon: "check" },
 };
 
 // One line of an agent message, without Markdown markers.
@@ -48,6 +50,8 @@ export function describe(e: RunEvent): React.ReactNode {
     case "cases_approved": return <>You approved {d.cases} test case{d.cases === 1 ? "" : "s"}{d.edited ? ", with your changes" : ""}</>;
     case "approval_request": return d.kind === "test_cases" ? <>Asked you to review {d.plan?.cases?.length ?? ""} test cases</> : <>Asked for approval{d.request ? ` (${d.request})` : ""}</>;
     case "approval_answer": return <>Your answer: <span className="font-medium">{d.answer === "y" ? "approved" : String(d.answer ?? "").startsWith("{") ? "approved with your changes" : d.answer ?? "no answer"}</span></>;
+    case "followup_started": return d.kind === "debug" ? <>The debugger was asked to look at <span className="font-medium">{d.request}</span> again</> : <>The self-healer started applying the chosen fix to <span className="font-medium">{d.request}</span></>;
+    case "followup_finished": return <>{d.kind === "debug" ? "The debugger" : "The self-healer"} finished{d.exit_code ? <span className="text-bad-ink"> early (exit code {d.exit_code})</span> : ""}</>;
     case "server_errors": return <>{d.summary}</>;
     case "server_issue": return <span className="font-medium">{d.message}</span>;
     case "circuit_breaker": return <>Circuit breaker tripped: {d.requests_needing_diagnosis} requests failing (trips at {d.trips_at})</>;
